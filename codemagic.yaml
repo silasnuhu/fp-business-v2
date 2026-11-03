@@ -1,0 +1,34 @@
+workflows:
+  ios-release:
+    name: iOS Release
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.timeterest.flickpitchbusiness
+      vars:
+        BUNDLE_ID: com.timeterest.flickpitchbusiness
+        APP_STORE_APP_ID: "6830081130"
+    scripts:
+      - name: Flutter pub get
+        script: flutter pub get
+      - name: Set up code signing
+        script: |
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          keychain add-certificates
+          xcode-project use-profiles
+      - name: Build IPA
+        script: |
+          flutter build ipa --release --export-options-plist=$HOME/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_API_KEY
+        submit_to_testflight: true
