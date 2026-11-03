@@ -1,0 +1,1087 @@
+// ignore_for_file: deprecated_member_use, use_build_context_synchronously, avoid_print
+
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:whoxa/featuers/profile/provider/catalog_provider.dart';
+import 'package:whoxa/featuers/profile/screens/catalog_detail_screen.dart';
+import 'package:whoxa/featuers/profile/widgets/manage_images_dialog.dart';
+import 'package:whoxa/featuers/auth/data/models/user_name_check_model.dart';
+import 'package:whoxa/utils/app_size_config.dart';
+import 'package:whoxa/utils/preference_key/constant/app_colors.dart';
+import 'package:whoxa/utils/preference_key/constant/app_direction_manage.dart';
+import 'package:whoxa/utils/preference_key/constant/app_text_style.dart';
+import 'package:whoxa/utils/preference_key/constant/app_theme_manage.dart';
+import 'package:whoxa/utils/preference_key/constant/strings.dart';
+import 'package:whoxa/widgets/global.dart';
+
+class ManageCatalogScreen extends StatefulWidget {
+  final int? profileUserId; // User ID of the profile being viewed
+  final bool
+  isViewOnly; // Whether this is view-only mode (viewing someone else's catalog)
+
+  const ManageCatalogScreen({
+    super.key,
+    this.profileUserId,
+    this.isViewOnly = false,
+  });
+
+  @override
+  State<ManageCatalogScreen> createState() => _ManageCatalogScreenState();
+}
+
+class _ManageCatalogScreenState extends State<ManageCatalogScreen> {
+  final ScrollController _scrollController = ScrollController();
+  bool _hasChanges = false; // Track if any changes were made
+
+  // Form variables for bottom sheet
+  final _formKey = GlobalKey<FormState>();
+  final TextEditingController _titleController = TextEditingController();
+  final TextEditingController _descriptionController = TextEditingController();
+  final TextEditingController _priceController = TextEditingController();
+  final List<File> _catalogImages = [];
+  final ImagePicker _picker = ImagePicker();
+  bool _isSavingProduct = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeData();
+  }
+
+  void _initializeData() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = Provider.of<CatalogProvider>(context, listen: false);
+      provider.loadCatalogs(refresh: true);
+      provider.loadCategories();
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _titleController.dispose();
+    _descriptionController.dispose();
+    _priceController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          Navigator.pop(context, _hasChanges);
+        }
+      },
+      child: Scaffold(
+        backgroundColor: AppThemeManage.appTheme.scaffoldBackColor,
+        appBar: AppBar(
+          backgroundColor: AppThemeManage.appTheme.scaffoldBackColor,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: IconButton(
+            icon: Icon(
+              Icons.arrow_back_ios,
+              color: AppThemeManage.appTheme.darkWhiteColor,
+              size: 20,
+            ),
+            onPressed: () => Navigator.pop(context, _hasChanges),
+          ),
+          title: Text(
+            AppString.profileStrings.catalogManager, //'Catalog Manager',
+            style: AppTypography.h5(context).copyWith(
+              color: AppThemeManage.appTheme.textColor,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          actions: [
+            if (!widget.isViewOnly)
+              Container(
+                margin: AppDirectionality.appDirectionPadding.paddingEnd(
+                  16,
+                ), //EdgeInsets.only(right: 16),
+                child: ElevatedButton(
+                  onPressed: () => _navigateToAddCatalog(),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.appPriSecColor.primaryColor,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    elevation: 0,
+                  ),
+                  child: Text(
+                    '+ ${AppString.profileStrings.add}',
+                    style: AppTypography.innerText14(context).copyWith(
+                      color: AppThemeManage.appTheme.scaffoldBackColor,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        body: Consumer<CatalogProvider>(
+          builder: (context, provider, child) {
+            if (provider.isLoading && provider.catalogs.isEmpty) {
+              return Center(child: commonLoading());
+            }
+
+            if (provider.catalogs.isEmpty && !provider.isLoading) {
+              return _buildEmptyState();
+            }
+
+            return RefreshIndicator(
+              onRefresh: () => provider.loadCatalogs(refresh: true),
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: EdgeInsets.all(16),
+                itemCount:
+                    provider.catalogs.length + (provider.isLoadingMore ? 1 : 0),
+                itemBuilder: (context, index) {
+                  if (index == provider.catalogs.length) {
+                    return Center(
+                      child: Padding(
+                        padding: EdgeInsets.all(16),
+                        child: CircularProgressIndicator(
+                          color: AppColors.appPriSecColor.primaryColor,
+                        ),
+                      ),
+                    );
+                  }
+
+                  final catalog = provider.catalogs[index];
+                  return _buildCatalogCard(catalog);
+                },
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.all(32),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.inventory_2_outlined,
+              size: 80,
+              color: AppThemeManage.appTheme.textGreyWhite,
+            ),
+            SizedBox(height: 16),
+            Text(
+              AppString.profileStrings.noCatalogYet, //'No Catalogs Yet',
+              style: AppTypography.h4(context).copyWith(
+                fontWeight: FontWeight.w600,
+                color: AppThemeManage.appTheme.textColor,
+              ),
+            ),
+            SizedBox(height: 8),
+            Text(
+              AppString
+                  .profileStrings
+                  .startShowCasingYour, //'Start showcasing your products and services by adding your first catalog item.',
+              textAlign: TextAlign.center,
+              style: AppTypography.innerText14(context).copyWith(
+                color: AppThemeManage.appTheme.textGreyWhite,
+                height: 1.4,
+              ),
+            ),
+            SizedBox(height: 24),
+            if (!widget.isViewOnly)
+              ElevatedButton.icon(
+                onPressed: () => _navigateToAddCatalog(),
+                icon: Icon(Icons.add, color: Colors.white),
+                label: Text(
+                  AppString
+                      .profileStrings
+                      .addFirstCatalog, //'Add First Catalog',
+                  style: AppTypography.innerText14(
+                    context,
+                  ).copyWith(color: Colors.white, fontWeight: FontWeight.w600),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.appPriSecColor.primaryColor,
+                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              )
+            else
+              Text(
+                AppString
+                    .profileStrings
+                    .noCatalogsAvailable, //'No catalogs available',
+                style: AppTypography.innerText14(context).copyWith(
+                  color: AppThemeManage.appTheme.textGreyWhite,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCatalogCard(Catalog catalog) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 16),
+      // decoration: BoxDecoration(
+      //   color: Colors.white,
+      //   borderRadius: BorderRadius.circular(12),
+      //   boxShadow: [
+      //     BoxShadow(
+      //       offset: Offset(0, 2),
+      //       blurRadius: 8,
+      //       spreadRadius: 0,
+      //       color: AppColors.shadowColor.c000000.withValues(alpha: 0.1),
+      //     ),
+      //   ],
+      // ),
+      child: InkWell(
+        onTap: () => _navigateToCatalogDetail(catalog),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: EdgeInsets.all(12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Image section
+              _buildCardImage(catalog),
+
+              SizedBox(width: 12),
+
+              // Content section
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Title and Price Row
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Title
+                        Expanded(
+                          child: Text(
+                            catalog.title ?? 'No title found',
+                            style: AppTypography.innerText16(context).copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.appPriSecColor.primaryColor,
+                            ),
+                          ),
+                        ),
+
+                        // Price
+                        if (catalog.price != null && catalog.price! > 0)
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            // decoration: BoxDecoration(
+                            //   color: AppColors.appPriSecColor.primaryColor,
+                            //   borderRadius: BorderRadius.circular(12),
+                            // ),
+                            child: Text(
+                              '\$${catalog.price!.toStringAsFixed(catalog.price! % 1 == 0 ? 0 : 2)}',
+                              style: AppTypography.innerText12Ragu(
+                                context,
+                              ).copyWith(
+                                color: Colors.black,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+
+                    SizedBox(height: 8),
+
+                    // Description
+                    Text(
+                      catalog.description ??
+                          'Lorem ipsum dolor sit amet consectetur. Eget tellus eu tempor sit nec blandit. Integer vitae faucibus quisque vivamus. Integer vitae faucibus quisque vivamus.',
+                      style: AppTypography.innerText12Ragu(context).copyWith(
+                        color: AppThemeManage.appTheme.textGreyWhite,
+                        height: 1.4,
+                      ),
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+
+              // Arrow icon
+              Icon(
+                Icons.arrow_forward_ios,
+                color: AppThemeManage.appTheme.textGreyWhite,
+                size: 16,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCardImage(Catalog catalog) {
+    final images = catalog.catalogImages ?? [];
+
+    // Use first image if available, otherwise show placeholder
+    final imageUrl = images.isNotEmpty ? images.first.image : null;
+
+    return Container(
+      width: SizeConfig.width(25),
+      height: SizeConfig.height(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        color: AppThemeManage.appTheme.greyBorder,
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child:
+            imageUrl != null
+                ? CachedNetworkImage(
+                  imageUrl: imageUrl,
+                  fit: BoxFit.cover,
+                  width: SizeConfig.width(25),
+                  height: SizeConfig.height(12),
+                  placeholder:
+                      (context, url) => Container(
+                        color: AppThemeManage.appTheme.shimmerBaseColor,
+                        child: Center(
+                          child: CircularProgressIndicator(
+                            color: AppColors.appPriSecColor.primaryColor,
+                            strokeWidth: 2,
+                          ),
+                        ),
+                      ),
+                  errorWidget:
+                      (context, url, error) => Container(
+                        color: AppThemeManage.appTheme.shimmerBaseColor,
+                        child: Center(
+                          child: Icon(
+                            Icons.image_not_supported,
+                            color: AppThemeManage.appTheme.textGreyWhite,
+                            size: 24,
+                          ),
+                        ),
+                      ),
+                )
+                : Container(
+                  color: AppThemeManage.appTheme.shimmerBaseColor,
+                  child: Center(
+                    child: Icon(
+                      Icons.image,
+                      color: AppThemeManage.appTheme.textGreyWhite,
+                      size: 24,
+                    ),
+                  ),
+                ),
+      ),
+    );
+  }
+
+  void _navigateToAddCatalog() {
+    // ✅ DEMO MODE: Block add catalog for demo accounts
+    if (checkDemoMode(context)) return;
+    _showAddCatalogBottomSheet();
+  }
+
+  void _navigateToCatalogDetail(Catalog catalog) async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder:
+            (context) => CatalogDetailScreen(
+              catalog: catalog,
+              isEdit:
+                  !widget
+                      .isViewOnly, // Only allow editing if not in view-only mode
+              isViewOnly: widget.isViewOnly,
+            ),
+      ),
+    );
+
+    // If catalog was updated successfully, refresh the list and mark changes
+    if (result == true && mounted) {
+      setState(() {
+        _hasChanges = true; // Mark that changes were made
+      });
+      final provider = Provider.of<CatalogProvider>(context, listen: false);
+      provider.loadCatalogs(refresh: true);
+    }
+  }
+
+  // ignore: unused_element
+  void _showManageImagesDialog(Catalog catalog) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => ManageImagesDialog(catalog: catalog),
+    );
+
+    // If images were modified, refresh the catalog list and mark changes
+    if (result == true && mounted) {
+      setState(() {
+        _hasChanges = true; // Mark that changes were made
+      });
+      final provider = Provider.of<CatalogProvider>(context, listen: false);
+      provider.loadCatalogs(refresh: true);
+    }
+  }
+
+  // ignore: unused_element
+  void _showDeleteConfirmationDialog(Catalog catalog) {
+    // ✅ DEMO MODE: Block delete catalog for demo accounts
+    if (checkDemoMode(context)) return;
+    // ignore: unused_element
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(
+            'Delete Catalog',
+            style: AppTypography.h4(context).copyWith(
+              fontWeight: FontWeight.w600,
+              color: AppThemeManage.appTheme.textColor,
+            ),
+          ),
+          content: Text(
+            'Are you sure you want to delete "${catalog.title}"? This action cannot be undone.',
+            style: AppTypography.innerText12Ragu(context).copyWith(
+              color: AppThemeManage.appTheme.textGreyWhite,
+              height: 1.4,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                'Cancel',
+                style: TextStyle(
+                  color: AppThemeManage.appTheme.textGreyWhite,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                final provider = Provider.of<CatalogProvider>(
+                  context,
+                  listen: false,
+                );
+                final success = await provider.deleteCatalog(
+                  catalog.catalogId!,
+                );
+
+                if (mounted) {
+                  if (success) {
+                    setState(() {
+                      _hasChanges = true; // Mark that changes were made
+                    });
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        success
+                            ? 'Catalog deleted successfully'
+                            : 'Failed to delete catalog',
+                      ),
+                      backgroundColor: success ? Colors.green : Colors.red,
+                    ),
+                  );
+                }
+              },
+              child: Text(
+                'Delete',
+                style: TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showAddCatalogBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (BuildContext context) {
+        return Consumer<CatalogProvider>(
+          builder: (context, provider, child) {
+            return StatefulBuilder(
+              builder: (BuildContext context, StateSetter setModalState) {
+                return DraggableScrollableSheet(
+                  initialChildSize: 0.95,
+                  minChildSize: 0.5,
+                  maxChildSize: 0.95,
+                  builder: (_, controller) {
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: AppThemeManage.appTheme.scaffoldBackColor,
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(20),
+                          topRight: Radius.circular(20),
+                        ),
+                      ),
+                      child: _buildProductFormBottomSheet(
+                        controller,
+                        provider,
+                        setModalState,
+                      ),
+                    );
+                  },
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildProductFormBottomSheet(
+    ScrollController controller,
+    CatalogProvider provider,
+    StateSetter setModalState,
+  ) {
+    return Form(
+      key: _formKey,
+      child: SingleChildScrollView(
+        controller: controller,
+        child: Padding(
+          padding: SizeConfig.getPaddingSymmetric(horizontal: 20, vertical: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Handle bar
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: AppThemeManage.appTheme.textGreyWhite.withValues(
+                      alpha: 0.3,
+                    ),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+
+              SizedBox(height: SizeConfig.height(2)),
+
+              // Title
+              Center(
+                child: Text(
+                  AppString.profileStrings.addCatalogue, //'Add Catalogue',
+                  style: AppTypography.h5(context).copyWith(
+                    fontWeight: FontWeight.w700,
+                    fontSize: SizeConfig.getFontSize(18),
+                    color: AppThemeManage.appTheme.textColor,
+                  ),
+                ),
+              ),
+
+              SizedBox(height: SizeConfig.height(3)),
+
+              // Form Fields
+              // Product Title
+              _buildFormField(
+                label: AppString.profileStrings.title, //'Title*',
+                hintText: AppString.profileStrings.enterTitle, //'Enter Title',
+                controller: _titleController,
+                maxLength: 50,
+                validator: (value) {
+                  if (value?.trim().isEmpty ?? true) {
+                    return AppString
+                        .profileStrings
+                        .pleaseEnterProductTitle; //'Please enter product title';
+                  }
+                  if (value!.trim().length < 3) {
+                    return AppString
+                        .profileStrings
+                        .productTitleMustBe; //'Product title must be at least 3 characters';
+                  }
+                  return null;
+                },
+              ),
+
+              SizedBox(height: SizeConfig.height(2)),
+
+              // Description
+              _buildFormField(
+                label:
+                    AppString.profileStrings.descriptionStar, //'Description*',
+                hintText:
+                    AppString
+                        .profileStrings
+                        .enterDescription, //'Enter Description',
+                controller: _descriptionController,
+                maxLines: 3,
+                maxLength: 400,
+                validator: (value) {
+                  if (value?.trim().isEmpty ?? true) {
+                    return AppString
+                        .profileStrings
+                        .pleaseEnterProductDescription; //'Please enter product description';
+                  }
+                  if (value!.trim().length < 10) {
+                    return AppString
+                        .profileStrings
+                        .descriptionMustBe10; //'Description must be at least 10 characters';
+                  }
+                  return null;
+                },
+              ),
+
+              SizedBox(height: SizeConfig.height(2)),
+
+              // Price
+              _buildFormField(
+                label: AppString.profileStrings.price, //'Price',
+                hintText: AppString.profileStrings.enterPrice, //'Enter Price',
+                controller: _priceController,
+                keyboardType: TextInputType.numberWithOptions(decimal: true),
+                prefixIcon: Icon(
+                  Icons.attach_money,
+                  color: AppColors.appPriSecColor.primaryColor,
+                  size: 20,
+                ),
+                validator: (value) {
+                  if (value?.trim().isNotEmpty ?? false) {
+                    final price = double.tryParse(value!.trim());
+                    if (price == null) {
+                      return AppString
+                          .profileStrings
+                          .pleaseEnterValidPrice; //'Please enter a valid price';
+                    }
+                    if (price < 0) {
+                      return AppString
+                          .profileStrings
+                          .priceCannotBeNegative; //'Price cannot be negative';
+                    }
+                    if (price > 999999) {
+                      return '${AppString.profileStrings.priceCannotExceed} \$999,999';
+                    }
+                  }
+                  return null;
+                },
+              ),
+
+              SizedBox(height: SizeConfig.height(2)),
+
+              // Images Section
+              _buildImagesSectionWithState(setModalState),
+
+              SizedBox(height: SizeConfig.height(3)),
+
+              // Add Button
+              SizedBox(
+                width: double.infinity,
+                child:
+                    _isSavingProduct
+                        ? Container(
+                          height: SizeConfig.sizedBoxHeight(56),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            color: AppColors.appPriSecColor.primaryColor
+                                .withValues(alpha: 0.5),
+                          ),
+                          child: Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                  Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                        : ElevatedButton(
+                          onPressed:
+                              () => _saveProductFromBottomSheet(provider),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                AppColors.appPriSecColor.primaryColor,
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            padding: SizeConfig.getPaddingSymmetric(
+                              vertical: 16,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            AppString.profileStrings.add, //'Add',
+                            style: AppTypography.h5(context).copyWith(
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                              fontSize: SizeConfig.getFontSize(16),
+                            ),
+                          ),
+                        ),
+              ),
+
+              SizedBox(height: SizeConfig.height(2)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFormField({
+    required String label,
+    required String hintText,
+    required TextEditingController controller,
+    TextInputType? keyboardType,
+    String? Function(String?)? validator,
+    int maxLines = 1,
+    int? maxLength,
+    String? prefixText,
+    Widget? prefixIcon,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        RichText(
+          text: TextSpan(
+            style: AppTypography.innerText12Mediu(context).copyWith(
+              fontWeight: FontWeight.w600,
+              color: AppThemeManage.appTheme.textColor,
+              fontSize: SizeConfig.getFontSize(14),
+            ),
+            children: [
+              TextSpan(text: label.replaceAll('*', '')),
+              if (label.contains('*'))
+                TextSpan(text: ' *', style: TextStyle(color: Colors.red)),
+            ],
+          ),
+        ),
+        SizedBox(height: SizeConfig.height(0.5)),
+        TextFormField(
+          controller: controller,
+          keyboardType: keyboardType,
+          maxLines: maxLines,
+          maxLength: maxLength,
+          validator: validator,
+          decoration: InputDecoration(
+            hintText: hintText,
+            prefixText: prefixText,
+            prefixIcon: prefixIcon,
+            hintStyle: AppTypography.innerText08(context).copyWith(
+              color: AppThemeManage.appTheme.textGreyWhite,
+              fontSize: SizeConfig.getFontSize(14),
+            ),
+            filled: true,
+            fillColor: AppThemeManage.appTheme.bg4BlackGrey.withValues(
+              alpha: 0.1,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                color: AppThemeManage.appTheme.borderColor,
+              ),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                color: AppThemeManage.appTheme.borderColor,
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: BorderSide(
+                color: AppColors.appPriSecColor.primaryColor,
+              ),
+            ),
+            contentPadding: SizeConfig.getPaddingSymmetric(
+              horizontal: 16,
+              vertical: 12,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildImagesSectionWithState(StateSetter setModalState) {
+    return FormField<List<File>>(
+      initialValue: _catalogImages,
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return AppString
+              .profileStrings
+              .pleaseSelectOne; //'Please select at least one product image';
+        }
+        return null;
+      },
+      builder: (FormFieldState<List<File>> field) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            RichText(
+              text: TextSpan(
+                style: AppTypography.innerText12Mediu(context).copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: AppThemeManage.appTheme.textColor,
+                  fontSize: SizeConfig.getFontSize(14),
+                ),
+                children: [
+                  TextSpan(text: '${AppString.profileStrings.images} '),
+                  TextSpan(text: '*', style: TextStyle(color: Colors.red)),
+                ],
+              ),
+            ),
+            SizedBox(height: SizeConfig.height(1)),
+
+            Container(
+              height: 90,
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color:
+                      field.hasError
+                          ? Colors.red.shade600
+                          : AppThemeManage.appTheme.borderColor,
+                  width: field.hasError ? 1.5 : 1,
+                ),
+                color:
+                    field.hasError
+                        ? Colors.red.shade50.withValues(alpha: 0.1)
+                        : AppThemeManage.appTheme.scaffoldBackColor,
+              ),
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  // Add image button
+                  InkWell(
+                    onTap:
+                        () => _pickImagesWithModalState(setModalState, field),
+                    child: Container(
+                      width: 74,
+                      height: 74,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: AppThemeManage.appTheme.borderColor,
+                          style: BorderStyle.solid,
+                        ),
+                        color: AppThemeManage.appTheme.bg4BlackGrey.withValues(
+                          alpha: 0.1,
+                        ),
+                      ),
+                      child: Icon(
+                        Icons.add,
+                        color: AppThemeManage.appTheme.textGreyWhite,
+                        size: 32,
+                      ),
+                    ),
+                  ),
+
+                  // Selected images
+                  ..._catalogImages.asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final image = entry.value;
+
+                    return Container(
+                      margin: EdgeInsets.only(left: 8),
+                      child: Stack(
+                        children: [
+                          Container(
+                            width: 74,
+                            height: 74,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.file(image, fit: BoxFit.cover),
+                            ),
+                          ),
+                          Positioned(
+                            top: 4,
+                            right: 4,
+                            child: InkWell(
+                              onTap: () {
+                                setModalState(() {
+                                  _catalogImages.removeAt(index);
+                                });
+                                // Update form field
+                                field.didChange(_catalogImages);
+                                // Also update the main widget state
+                                setState(() {});
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: Colors.red,
+                                ),
+                                child: Icon(
+                                  Icons.close,
+                                  size: 14,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                ],
+              ),
+            ),
+
+            if (field.hasError)
+              Padding(
+                padding: SizeConfig.getPaddingOnly(top: 8, left: 4),
+                child: Text(
+                  field.errorText!,
+                  style: AppTypography.captionText(
+                    context,
+                  ).copyWith(color: Colors.red.shade600, fontSize: 12),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _pickImagesWithModalState(
+    StateSetter setModalState,
+    FormFieldState<List<File>>? field,
+  ) async {
+    try {
+      final List<XFile> pickedFiles = await _picker.pickMultiImage(
+        maxWidth: 1080,
+        maxHeight: 1080,
+        imageQuality: 80,
+      );
+
+      if (pickedFiles.isNotEmpty) {
+        setModalState(() {
+          _catalogImages.addAll(
+            pickedFiles.map((file) => File(file.path)).toList(),
+          );
+        });
+        // Update form field if provided
+        field?.didChange(_catalogImages);
+        // Also update the main widget state
+        setState(() {});
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error picking images: $e')));
+      }
+    }
+  }
+
+  void _clearForm() {
+    _titleController.clear();
+    _descriptionController.clear();
+    _priceController.clear();
+    _catalogImages.clear();
+  }
+
+  Future<void> _saveProductFromBottomSheet(CatalogProvider provider) async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    // Set loading state
+    setState(() {
+      _isSavingProduct = true;
+    });
+
+    try {
+      // Use the catalog provider's add method which expects the form to be filled
+      provider.titleController.text = _titleController.text.trim();
+      provider.descriptionController.text = _descriptionController.text.trim();
+      provider.priceController.text = _priceController.text.trim();
+
+      // Add images to provider
+      provider.clearImages();
+      for (final image in _catalogImages) {
+        provider.addImage(image);
+      }
+
+      final success = await provider.addCatalog();
+
+      if (mounted) {
+        setState(() {
+          _isSavingProduct = false;
+        });
+
+        if (success) {
+          Navigator.pop(context);
+          _clearForm();
+          setState(() {
+            _hasChanges = true; // Mark that changes were made
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Product added successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+
+          // Refresh catalog list
+          provider.loadCatalogs(refresh: true);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                provider.errorMessage.isNotEmpty
+                    ? provider.errorMessage
+                    : 'Failed to add product',
+              ),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isSavingProduct = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add product: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+}

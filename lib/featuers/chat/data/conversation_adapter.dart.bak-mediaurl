@@ -1,0 +1,247 @@
+import 'package:whoxa/core/services/media/media_url.dart';
+import 'package:whoxa/featuers/chat/data/chat_list_model.dart';
+import 'package:whoxa/featuers/chat/data/chats_model.dart' show CallData;
+import 'package:whoxa/featuers/chat/data/conversation_dto.dart';
+
+// Maps NEW's slim `ConversationDto` (+ separately-fetched peer profile,
+// preview message, and archived-flag context) onto the existing OLD-shaped
+// `Chats`/`Records`/`Participants`/`Messages`/`PeerUserData` models, so
+// chat_list.dart and the rest of the chat-list UI don't need to change at
+// all. Fidelity notes (see call sites / final migration report):
+//  - groupIcon/profilePic hold DISPLAYABLE urls: the caller resolves the
+//    conversation's `avatarMediaId` (and the peer's `profilePic`, when that
+//    too is a bare id) through MediaRepository.getDisplayUrl -> the media
+//    row's `cdnUrl`, and passes the result in as `avatarUrl`/`peerAvatarUrl`.
+//    When a caller doesn't resolve, values that are already URLs still pass
+//    through and a bare id degrades to null (default avatar) — `/media/:id`
+//    returns metadata, not bytes, so an id is never a usable image src.
+//  - groupDescription comes from the conversation's `description` (groups
+//    only).
+//  - blockedBy is populated from the caller's own block-list check
+//    (Phase 3), not from the conversation payload — NEW's block/unblock is
+//    fully decoupled from conversations now.
+//  - Participants.isLocked/lockedAt have no NEW equivalent and stay null.
+class ConversationAdapter {
+  static Chats toChat({
+    required ConversationDto conversation,
+    required String currentUserId,
+    required bool archived,
+    Map<String, dynamic>? peerProfile,
+    Map<String, dynamic>? previewMessage,
+    bool isBlockedByMe = false,
+    String? avatarUrl,
+    String? peerAvatarUrl,
+  }) {
+    final isGroup = conversation.type == 'group';
+    final chatId = int.tryParse(conversation.id) ?? 0;
+
+    final myParticipant = conversation.participants.firstWhere(
+      (p) => p.userId == currentUserId,
+      orElse:
+          () => ConversationParticipantDto(userId: currentUserId, role: 'member'),
+    );
+    final unseen = (conversation.lastMessageSeq - (myParticipant.lastReadSeq ?? 0));
+    final unseenCount = unseen > 0 ? unseen : 0;
+
+    final participants =
+        conversation.participants
+            .map(
+              (p) => Participants(
+                participantId: null,
+                isAdmin: p.role == 'owner',
+                isDeleted: p.leftAt != null,
+                isCreator: p.userId == conversation.createdBy,
+                isLocked: null,
+                chatId: chatId,
+                userId: int.tryParse(p.userId),
+              ),
+            )
+            .toList();
+
+    final messages =
+        previewMessage != null
+            ? [_previewToMessage(previewMessage, chatId)]
+            : <Messages>[];
+
+    final record = Records(
+      chatId: chatId,
+      groupIcon:
+          isGroup
+              ? (avatarUrl ?? MediaUrl.normalize(conversation.avatarMediaId))
+              : null,
+      chatType: isGroup ? 'group' : 'private',
+      groupName: isGroup ? conversation.title : null,
+      groupDescription: isGroup ? conversation.description : null,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+      messages: messages,
+      unseenCount: unseenCount,
+      blockedBy: isBlockedByMe ? [currentUserId] : [],
+      archivedFor: archived ? [currentUserId] : [],
+      participants: participants,
+      isPinned: myParticipant.isPinned,
+      isFavorite: myParticipant.isFavorite,
+      isMuted: myParticipant.isMuted,
+      isArchived: myParticipant.isArchived,
+      labelIds: myParticipant.labelIds,
+    );
+
+    PeerUserData? peer;
+    if (!isGroup && peerProfile != null) {
+      // `getUserBasicProfile` hits `GET /users/:id`, which is
+      // `UsersService.toPublicUser()` (verified against actual backend
+      // source) — a camelCase-keyed mapper, NOT the snake_case
+      // `toUserData()` used by verify-OTP/updateUser. Read camelCase first;
+      // snake_case kept only as a defensive fallback. `toPublicUser` has no
+      // `gender` field at all, so that one stays null either way.
+      peer = PeerUserData(
+        userId: int.tryParse(
+          (peerProfile['userId'] ?? peerProfile['user_id'])?.toString() ?? '',
+        ),
+        userName:
+            (peerProfile['userName'] ?? peerProfile['user_name']) as String?,
+        fullName:
+            ((peerProfile['fullName'] ?? peerProfile['full_name'])
+                    as String?) ??
+                '',
+        firstName:
+            (peerProfile['firstName'] ?? peerProfile['first_name']) as String?,
+        lastName:
+            (peerProfile['lastName'] ?? peerProfile['last_name']) as String?,
+        email: peerProfile['email'] as String?,
+        profilePic:
+            peerAvatarUrl ??
+            MediaUrl.normalize(
+              (peerProfile['profilePic'] ?? peerProfile['profile_pic'])
+                  as String?,
+            ),
+        countryCode:
+            (peerProfile['countryCode'] ?? peerProfile['country_code'])
+                as String?,
+        phoneNumber:
+            (peerProfile['mobileNum'] ?? peerProfile['mobile_num'])
+                as String?,
+        country: peerProfile['country'] as String?,
+        gender: peerProfile['gender'] as String?,
+        bio: peerProfile['bio'] as String?,
+      );
+    }
+
+    return Chats(records: [record], peerUserData: peer);
+  }
+
+  /// Finds the "other" participant's userId for a direct (1:1) conversation
+  /// — the one to fetch a peer profile for. Returns null for group chats or
+  /// if the other participant can't be determined.
+  static String? peerIdFor(ConversationDto conversation, String currentUserId) {
+    if (conversation.type == 'group') return null;
+    final other = conversation.participants.firstWhere(
+      (p) => p.userId != currentUserId,
+      orElse: () => ConversationParticipantDto(userId: '', role: 'member'),
+    );
+    return other.userId.isEmpty ? null : other.userId;
+  }
+
+  static Messages _previewToMessage(Map<String, dynamic> json, int chatId) {
+    // message_type renames confirmed by the guide (§6.5): doc -> document,
+    // voice -> audio. `messageId`/`senderId` confirmed against a live
+    // `GET /messages/:conversationId` response (MessagesService.toPublicMessage
+    // shape) — `messageId` not `id`, and both id-like fields come back as
+    // BigInt-safe strings, not JSON numbers, same as everywhere else in this
+    // backend. `senderId` must be parsed to int here (not left as the raw
+    // dynamic value) because everything downstream that reads
+    // `Messages.senderId` — chat_list.dart, CallPreviewMapper,
+    // CallDisplayService, etc. — expects an `int?`; leaving it a String
+    // throws "type 'String' is not a subtype of type 'int?'" the moment a
+    // preview message with a real sender renders.
+    var type = json['type'] as String? ?? json['message_type'] as String?;
+    if (type == 'doc') type = 'document';
+    if (type == 'voice') type = 'audio';
+
+    // NEW emits group lifecycle events as `type: 'system'` + `metadata.event`.
+    // The chat-list preview builder (messageContentWithEmojiSafe) keys off the
+    // OLD per-event strings, so translate the same way MessageAdapter does.
+    if (type == 'system') {
+      final event =
+          ((json['metadata'] as Map?)?.cast<String, dynamic>() ??
+              const <String, dynamic>{})['event'];
+      switch (event) {
+        case 'group_created':
+          type = 'group-created';
+          break;
+        case 'member_added':
+        case 'members_added':
+          type = 'member-added';
+          break;
+        case 'member_removed':
+          type = 'member-removed';
+          break;
+        case 'member_left':
+          type = 'member-left';
+          break;
+        case 'admin_promoted':
+        case 'promoted_as_admin':
+          type = 'promoted-as-admin';
+          break;
+        case 'admin_removed':
+        case 'removed_as_admin':
+          type = 'removed-as-admin';
+          break;
+        default:
+          type = 'system';
+      }
+    }
+
+    final senderId = int.tryParse(
+      (json['senderId'] ?? json['sender_id'])?.toString() ?? '',
+    );
+
+    // NEW logs call outcomes as `type: 'call_log'` with the call detail in
+    // `metadata` ({callId, callType, status, durationSeconds}). The chat-list
+    // preview (chat_list.dart -> CallPreviewMapper) keys off the OLD shape —
+    // `messageType == 'call'` + a `calls[]` array — so synthesize it here,
+    // otherwise the preview shows nothing meaningful for a call bubble.
+    if (type == 'call_log') {
+      final md = (json['metadata'] as Map?)?.cast<String, dynamic>() ??
+          const <String, dynamic>{};
+      final rawDuration = md['durationSeconds'];
+      return Messages(
+        messageType: 'call',
+        messageId: int.tryParse(
+          (json['messageId'] ?? json['id'] ?? json['message_id'])?.toString() ??
+              '',
+        ),
+        createdAt: json['createdAt'] as String?,
+        updatedAt: json['updatedAt'] as String?,
+        chatId: chatId,
+        senderId: senderId,
+        calls: [
+          CallData(
+            callId: int.tryParse('${md['callId'] ?? ''}'),
+            callType: md['callType'] as String?,
+            callStatus: md['status'] as String?,
+            callDuration: rawDuration is int
+                ? rawDuration
+                : int.tryParse('${rawDuration ?? ''}'),
+            users: const [],
+            userId: senderId,
+            chatId: chatId,
+          ),
+        ],
+      );
+    }
+
+    return Messages(
+      messageContent: (json['body'] ?? json['message_content']) as String?,
+      messageId: int.tryParse(
+        (json['messageId'] ?? json['id'] ?? json['message_id'])?.toString() ??
+            '',
+      ),
+      messageType: type,
+      createdAt: json['createdAt'] as String?,
+      updatedAt: json['updatedAt'] as String?,
+      chatId: chatId,
+      senderId: senderId,
+    );
+  }
+}

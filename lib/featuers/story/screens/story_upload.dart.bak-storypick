@@ -1,0 +1,352 @@
+// ignore_for_file: deprecated_member_use
+import 'dart:developer';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+import 'package:whoxa/design/fp_tokens.dart';
+import 'package:whoxa/featuers/story/provider/story_provider.dart';
+import 'package:whoxa/featuers/story/screens/video_play.dart';
+import 'package:whoxa/utils/preference_key/constant/strings.dart';
+import 'package:whoxa/widgets/global.dart';
+
+/// Create-story composer.
+///
+/// Rebuilt on the Flickpitch design system: the stock black AppBar + flat
+/// bottom strip is replaced by an edge-to-edge media stage with a scrim, a
+/// translucent close button, and a floating caption bar with a gradient send
+/// action. Behaviour is unchanged - the same provider calls, the same demo
+/// guard, the same 255-character caption limit and the same post-upload
+/// refresh + pop.
+class StoryUpload extends StatefulWidget {
+  const StoryUpload({super.key});
+
+  @override
+  State<StoryUpload> createState() => _StoryUploadState();
+}
+
+class _StoryUploadState extends State<StoryUpload> {
+  FocusNode typeNode = FocusNode();
+
+  Offset cropTopLeft = Offset(50, 50);
+  Offset cropBottomRight = Offset(250, 250);
+
+  String caption = '';
+
+  @override
+  void dispose() {
+    typeNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return WillPopScope(
+      onWillPop: () async {
+        final storyProvider = Provider.of<StoryProvider>(
+          context,
+          listen: false,
+        );
+        storyProvider.selectedMediaFile = null;
+        storyProvider.selectedMediaType = null;
+        return true;
+      },
+      child: Scaffold(
+        backgroundColor: Fp.ink,
+        body: Consumer<StoryProvider>(
+          builder: (context, storyProvider, _) {
+            final file = storyProvider.selectedMediaFile;
+            final type = storyProvider.selectedMediaType;
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                // ---- media stage -------------------------------------------
+                if (file != null && type == 'image')
+                  InteractiveViewer(
+                    maxScale: 3,
+                    child: Image.file(file, fit: BoxFit.contain),
+                  )
+                else if (file != null && type == 'video')
+                  Center(
+                    child: AspectRatio(
+                      aspectRatio: 9 / 16,
+                      child: VideoPreview(videoFile: file),
+                    ),
+                  )
+                else
+                  Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.image_not_supported_outlined,
+                          size: 34,
+                          color: Fp.textFaint,
+                        ),
+                        const SizedBox(height: Fp.s12),
+                        Text(
+                          'Nothing selected',
+                          style: Fp.body.copyWith(color: Fp.textMuted),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                // ---- top scrim + close -------------------------------------
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  child: Container(
+                    padding: EdgeInsets.only(
+                      top: MediaQuery.of(context).padding.top + Fp.s8,
+                      bottom: Fp.s24,
+                      left: Fp.s16,
+                      right: Fp.s16,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.black.withValues(alpha: 0.55),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        _RoundButton(
+                          icon: Icons.close_rounded,
+                          onTap: () => Navigator.maybePop(context),
+                        ),
+                        const SizedBox(width: Fp.s12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'New story',
+                                style: Fp.bodyStrong.copyWith(
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Text(
+                                'Shares for 24 hours',
+                                style: Fp.caption.copyWith(
+                                  color: Colors.white.withValues(alpha: 0.75),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        _TypeChip(label: (type ?? 'media').toUpperCase()),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // ---- caption + send ----------------------------------------
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    padding: EdgeInsets.fromLTRB(
+                      Fp.s16,
+                      Fp.s24,
+                      Fp.s16,
+                      MediaQuery.of(context).viewPadding.bottom + Fp.s16,
+                    ),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [
+                          Colors.transparent,
+                          Colors.black.withValues(alpha: 0.72),
+                        ],
+                      ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: TextFormField(
+                            controller: storyProvider.typeMessageCtrl,
+                            onEditingComplete: () {
+                              FocusScope.of(context).requestFocus(typeNode);
+                            },
+                            maxLines: 3,
+                            minLines: 1,
+                            textInputAction: TextInputAction.newline,
+                            textCapitalization: TextCapitalization.sentences,
+                            keyboardType: TextInputType.multiline,
+                            style: Fp.body.copyWith(color: Colors.white),
+                            cursorColor: Fp.violetGlow,
+                            inputFormatters: [
+                              LengthLimitingTextInputFormatter(255),
+                            ],
+                            focusNode: typeNode,
+                            decoration: InputDecoration(
+                              filled: true,
+                              fillColor: Colors.white.withValues(alpha: 0.10),
+                              hintText: AppString.storyStrings.addCaption,
+                              hintStyle: Fp.body.copyWith(
+                                color: Colors.white.withValues(alpha: 0.65),
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: Fp.s16,
+                                vertical: Fp.s12,
+                              ),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(Fp.rPill),
+                                borderSide: BorderSide.none,
+                              ),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(Fp.rPill),
+                                borderSide: BorderSide(
+                                  color: Colors.white.withValues(alpha: 0.45),
+                                ),
+                              ),
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(Fp.rPill),
+                                borderSide: BorderSide(
+                                  color: Colors.white.withValues(alpha: 0.18),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: Fp.s12),
+                        _SendButton(
+                          busy: storyProvider.isLoading,
+                          onTap: () async {
+                            if (isDemo) {
+                              snackbarNew(
+                                context,
+                                msg: 'Demo accounts cannot upload stories',
+                              );
+                              return;
+                            }
+                            closeKeyboard();
+                            if (type == null || file == null) return;
+                            final success = await storyProvider.storyUploadApi(
+                              type,
+                              file,
+                              storyProvider.typeMessageCtrl.text,
+                            );
+
+                            if (success) {
+                              storyProvider.typeMessageCtrl.clear();
+                              if (!context.mounted) return;
+                              log(storyProvider.errorMessage.toString());
+                              await storyProvider.getAllStories();
+                              if (!context.mounted) return;
+                              Navigator.pop(context);
+                            } else {
+                              if (!context.mounted) return;
+                              log(storyProvider.errorMessage.toString());
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// Circular translucent control that stays readable on any photo.
+class _RoundButton extends StatelessWidget {
+  const _RoundButton({required this.icon, required this.onTap});
+
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 38,
+        height: 38,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: Colors.black.withValues(alpha: 0.35),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
+        ),
+        child: Icon(icon, size: 19, color: Colors.white),
+      ),
+    );
+  }
+}
+
+class _TypeChip extends StatelessWidget {
+  const _TypeChip({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Fp.s8, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(Fp.rPill),
+      ),
+      child: Text(
+        label,
+        style: Fp.caption.copyWith(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+          fontSize: 9,
+          letterSpacing: 0.6,
+        ),
+      ),
+    );
+  }
+}
+
+/// Gradient send action (brand violet -> cyan), with an inline spinner.
+class _SendButton extends StatelessWidget {
+  const _SendButton({required this.busy, required this.onTap});
+
+  final bool busy;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: busy ? null : onTap,
+      child: Container(
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Fp.violet, Fp.violetDeep],
+          ),
+          boxShadow: Fp.lift,
+        ),
+        child: busy
+            ? Padding(
+                padding: const EdgeInsets.all(15),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: const AlwaysStoppedAnimation(Colors.white),
+                ),
+              )
+            : const Icon(Icons.send_rounded, color: Colors.white, size: 22),
+      ),
+    );
+  }
+}

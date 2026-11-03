@@ -1,0 +1,470 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:whoxa/featuers/auth/data/models/user_name_check_model.dart';
+import 'package:whoxa/utils/app_size_config.dart';
+import 'package:whoxa/utils/preference_key/constant/app_colors.dart';
+import 'package:whoxa/utils/preference_key/constant/app_text_style.dart';
+import 'package:whoxa/utils/preference_key/constant/app_theme_manage.dart';
+
+class CatalogDetailScreen extends StatefulWidget {
+  final Catalog catalog;
+  final bool isEdit;
+  final bool isViewOnly;
+
+  const CatalogDetailScreen({
+    super.key,
+    required this.catalog,
+    this.isEdit = false,
+    this.isViewOnly = false,
+  });
+
+  @override
+  State<CatalogDetailScreen> createState() => _CatalogDetailScreenState();
+}
+
+class _CatalogDetailScreenState extends State<CatalogDetailScreen> {
+  final PageController _imageSliderController = PageController();
+  int _currentImageIndex = 0;
+
+  @override
+  void dispose() {
+    _imageSliderController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: AppThemeManage.appTheme.brightnessDarkLight,
+        statusBarBrightness: AppThemeManage.appTheme.brightnessLightDark,
+        systemNavigationBarColor: AppThemeManage.appTheme.scaffoldBackColor,
+        systemNavigationBarIconBrightness:
+            AppThemeManage.appTheme.brightnessDarkLight,
+      ),
+      child: Scaffold(
+        backgroundColor: AppThemeManage.appTheme.scaffoldBackColor,
+        appBar: AppBar(
+          backgroundColor: AppThemeManage.appTheme.scaffoldBackColor,
+          elevation: 0,
+          leading: IconButton(
+            icon: Icon(
+              Icons.arrow_back_ios,
+              color: AppThemeManage.appTheme.darkWhiteColor,
+              size: 20,
+            ),
+            onPressed: () => Navigator.pop(context),
+          ),
+          title: Text(
+            widget.catalog.title ?? 'Catalog Detail',
+            style: AppTypography.h5(context).copyWith(
+              color: AppThemeManage.appTheme.textColor,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        body: _buildViewOnlyLayout(),
+      ),
+    );
+  }
+
+  Widget _buildViewOnlyLayout() {
+    final existingImages = widget.catalog.catalogImages ?? [];
+    final hasImages = existingImages.isNotEmpty;
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Image Slider Section
+          if (hasImages)
+            _buildImageSlider(existingImages)
+          else
+            Container(
+              height: SizeConfig.height(30),
+              margin: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color:
+                    AppThemeManage.appTheme.textGreyWhite.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.image_not_supported_outlined,
+                      color: AppThemeManage.appTheme.textGreyWhite,
+                      size: 48,
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      'No Images Available',
+                      style: AppTypography.innerText16(context).copyWith(
+                        color: AppThemeManage.appTheme.textGreyWhite,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // Content Cards Section
+          Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Title Card
+                _buildInfoCard(
+                  label: 'Title',
+                  value: widget.catalog.title ?? 'No title available',
+                ),
+
+                SizedBox(height: 16),
+
+                // Price Card
+                _buildInfoCard(
+                  label: 'Price',
+                  value: widget.catalog.price != null
+                      ? '\$${widget.catalog.price}'
+                      : 'Price not specified',
+                ),
+
+                SizedBox(height: 16),
+
+                // Description Card
+                Container(
+                  width: double.infinity,
+                  padding: EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: AppThemeManage.appTheme.darkGreyColor,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: AppThemeManage.appTheme.borderColor,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Description',
+                        style: AppTypography.innerText14(context).copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: AppThemeManage.appTheme.textGreyWhite,
+                        ),
+                      ),
+                      SizedBox(height: 12),
+                      Text(
+                        widget.catalog.description ?? 'No description available',
+                        style: AppTypography.innerText16(context).copyWith(
+                          color: AppThemeManage.appTheme.textColor,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          SizedBox(height: 20),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImageSlider(List<CatalogImage> existingImages) {
+    if (existingImages.isEmpty) {
+      return SizedBox.shrink();
+    }
+
+    return Container(
+      height: SizeConfig.height(30),
+      margin: EdgeInsets.only(top: 16, left: 16, right: 16),
+      child: Stack(
+        children: [
+          // Image PageView
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: PageView.builder(
+              controller: _imageSliderController,
+              itemCount: existingImages.length,
+              onPageChanged: (index) {
+                setState(() {
+                  _currentImageIndex = index;
+                });
+              },
+              itemBuilder: (context, index) {
+                final image = existingImages[index];
+                return GestureDetector(
+                  onTap: () => _openImageViewer(existingImages, index),
+                  child: _buildSliderImage(image),
+                );
+              },
+            ),
+          ),
+
+          // Image counter badge (top right)
+          Positioned(
+            top: 12,
+            right: 12,
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.6),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                '${_currentImageIndex + 1}/${existingImages.length}',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+
+          // Dots indicator (bottom center)
+          if (existingImages.length > 1)
+            Positioned(
+              bottom: 12,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  existingImages.length,
+                  (index) => AnimatedContainer(
+                    duration: Duration(milliseconds: 300),
+                    margin: EdgeInsets.symmetric(horizontal: 4),
+                    width: _currentImageIndex == index ? 24 : 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: _currentImageIndex == index
+                          ? AppColors.appPriSecColor.primaryColor
+                          : Colors.white.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSliderImage(CatalogImage image) {
+    return CachedNetworkImage(
+      imageUrl: image.image ?? '',
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: double.infinity,
+      placeholder: (context, url) => Container(
+        color: AppThemeManage.appTheme.shimmerBaseColor,
+        child: Center(
+          child: CircularProgressIndicator(
+            color: AppColors.appPriSecColor.primaryColor,
+          ),
+        ),
+      ),
+      errorWidget: (context, url, error) => Container(
+        color: AppThemeManage.appTheme.shimmerBaseColor,
+        child: Center(
+          child: Icon(
+            Icons.image_not_supported,
+            color: AppThemeManage.appTheme.textGreyWhite,
+            size: 40,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoCard({required String label, required String value}) {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppThemeManage.appTheme.darkGreyColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppThemeManage.appTheme.borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: AppTypography.innerText14(context).copyWith(
+              fontWeight: FontWeight.w600,
+              color: AppThemeManage.appTheme.textGreyWhite,
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            value,
+            style: AppTypography.h5(context).copyWith(
+              color: AppThemeManage.appTheme.textColor,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openImageViewer(List<CatalogImage> images, int initialIndex) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => _FullScreenImageViewer(
+          images: images,
+          initialIndex: initialIndex,
+        ),
+      ),
+    );
+  }
+}
+
+/// Full-screen image viewer with swipe and zoom support
+class _FullScreenImageViewer extends StatefulWidget {
+  final List<CatalogImage> images;
+  final int initialIndex;
+
+  const _FullScreenImageViewer({
+    required this.images,
+    required this.initialIndex,
+  });
+
+  @override
+  State<_FullScreenImageViewer> createState() => _FullScreenImageViewerState();
+}
+
+class _FullScreenImageViewerState extends State<_FullScreenImageViewer> {
+  late PageController _pageController;
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          // Image viewer with PageView for swiping
+          PageView.builder(
+            controller: _pageController,
+            itemCount: widget.images.length,
+            onPageChanged: (index) {
+              setState(() {
+                _currentIndex = index;
+              });
+            },
+            itemBuilder: (context, index) {
+              final image = widget.images[index];
+              return _buildZoomableImage(image);
+            },
+          ),
+
+          // Top bar with close button and counter
+          SafeArea(
+            child: Container(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: 0.7),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(
+                    icon: Icon(Icons.close, color: Colors.white, size: 28),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${_currentIndex + 1} / ${widget.images.length}',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 48), // Balance the close button
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildZoomableImage(CatalogImage image) {
+    return InteractiveViewer(
+      minScale: 0.5,
+      maxScale: 4.0,
+      child: Center(
+        child: CachedNetworkImage(
+          imageUrl: image.image ?? '',
+          fit: BoxFit.contain,
+          placeholder: (context, url) => Center(
+            child: CircularProgressIndicator(
+              color: AppColors.appPriSecColor.primaryColor,
+            ),
+          ),
+          errorWidget: (context, url, error) => Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.image_not_supported,
+                  color: Colors.grey[400],
+                  size: 64,
+                ),
+                SizedBox(height: 16),
+                Text(
+                  'Failed to load image',
+                  style: TextStyle(
+                    color: Colors.grey[400],
+                    fontSize: 16,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

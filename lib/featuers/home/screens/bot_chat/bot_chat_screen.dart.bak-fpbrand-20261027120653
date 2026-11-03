@@ -1,0 +1,725 @@
+// ignore_for_file: deprecated_member_use
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:provider/provider.dart';
+import 'package:whoxa/core/services/socket/socket_event_controller.dart';
+import 'package:whoxa/featuers/chat/provider/chat_provider.dart';
+import 'package:whoxa/featuers/home/provider/chatbot_provider.dart';
+import 'package:whoxa/utils/app_size_config.dart';
+import 'package:whoxa/utils/preference_key/constant/app_assets.dart';
+import 'package:whoxa/utils/preference_key/constant/app_colors.dart';
+import 'package:whoxa/utils/preference_key/constant/app_direction_manage.dart';
+import 'package:whoxa/utils/preference_key/constant/app_text_style.dart';
+import 'package:whoxa/utils/preference_key/constant/app_theme_manage.dart';
+import 'package:whoxa/utils/preference_key/constant/strings.dart';
+import 'package:whoxa/widgets/cusotm_blur_appbar.dart';
+import 'package:whoxa/widgets/global.dart';
+
+// ─── Model ─────────────────────────────────────────────────────────────────────
+
+class BotMessage {
+  final int? messageId;
+  final String content;
+  final bool isBot;
+  final DateTime createdAt;
+
+  const BotMessage({
+    this.messageId,
+    required this.content,
+    required this.isBot,
+    required this.createdAt,
+  });
+
+  factory BotMessage.fromJson(Map<String, dynamic> json) => BotMessage(
+    messageId: json['message_id'],
+    content: json['content'] ?? '',
+    isBot: json['role'] == 'assistant',
+    createdAt: DateTime.tryParse(json['created_at'] ?? '') ?? DateTime.now(),
+  );
+}
+
+// ─── Screen ────────────────────────────────────────────────────────────────────
+// Only responsible for:
+//   1. Owning TextEditingController + ScrollController (need dispose)
+//   2. Calling provider.initChatSession once in initState
+//   3. Wiring the scroll-pagination listener
+
+class BotChatScreen extends StatefulWidget {
+  final int chatId;
+  final String chatName;
+  final String groupIcon;
+
+  const BotChatScreen({
+    super.key,
+    required this.chatId,
+    required this.chatName,
+    required this.groupIcon,
+  });
+
+  @override
+  State<BotChatScreen> createState() => _BotChatScreenState();
+}
+
+class _BotChatScreenState extends State<BotChatScreen> {
+  final TextEditingController _msgController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+
+    // Init provider session after first frame so context is ready
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final provider = context.read<ChatbotProvider>();
+      provider.initChatSession(
+        chatId: widget.chatId,
+        socketEventController: context.read<SocketEventController>(),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
+    _msgController.dispose();
+    super.dispose();
+  }
+
+  // ── Pagination trigger ────────────────────────────────────────────────────
+
+  void _onScroll() {
+    // reverse:true list → top of screen is maxScrollExtent
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
+      context.read<ChatbotProvider>().loadMoreHistory();
+    }
+  }
+
+  // ── Scroll to bottom ──────────────────────────────────────────────────────
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          0,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _onSend() async {
+    final provider = context.read<ChatbotProvider>();
+    if (provider.limitReached) {
+      snackbarNew(context, msg: "You have reached your limit.");
+      return;
+    }
+    if (_msgController.text.trim().isEmpty) {
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    final socketEventController = context.read<SocketEventController>();
+
+    // Call refresh only when no messages exist
+    if (provider.messages.isEmpty) {
+      await _onRefreshHistory();
+    }
+
+    final sent = provider.sendMessage(
+      text: _msgController.text,
+      socketEventController: socketEventController,
+    );
+
+    if (sent) {
+      _msgController.clear();
+      _scrollToBottom();
+    }
+  }
+
+  // ── Refresh history ───────────────────────────────────────────────────────
+
+  Future<void> _onRefreshHistory() async {
+    await context.read<ChatbotProvider>().refreshConversationHistory().then((
+      _,
+    ) {
+      _scrollToBottom();
+    });
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    SizeConfig().init(context);
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+      ),
+    );
+
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Scaffold(
+        backgroundColor: AppThemeManage.appTheme.scaffoldBackColor,
+        appBar: _BotChatAppBar(
+          chatName: widget.chatName,
+          groupIcon: widget.groupIcon,
+          onRefreshHistory: _onRefreshHistory,
+        ),
+        body: Stack(
+          children: [
+            Column(
+              children: [
+                Consumer2<SocketEventController, ChatProvider>(
+                  builder: (_, socketController, chatProvider, _) {
+                    if (socketController.isConnected) {
+                      return const SizedBox.shrink();
+                    }
+
+                    return Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 6,
+                        horizontal: 16,
+                      ),
+                      color: Colors.orange.withValues(alpha: 0.8),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+
+                          Expanded(
+                            child: Text(
+                              AppString.connectingToChatService,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+
+                          InkWell(
+                            onTap: () {
+                              chatProvider.connect();
+                            },
+                            child: const Icon(
+                              Icons.refresh,
+                              size: 16,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+                Expanded(
+                  child: _MessageList(scrollController: _scrollController),
+                ),
+                _InputBar(msgController: _msgController, onSend: _onSend),
+              ],
+            ),
+            // Full-screen loading overlay while fetching history
+            Consumer<ChatbotProvider>(
+              builder: (_, provider, _) {
+                if (!provider.isChatHistoryLoad) return const SizedBox.shrink();
+                return Stack(
+                  children: [
+                    ModalBarrier(
+                      dismissible: false,
+                      color: AppThemeManage.appTheme.darkWhiteColor.withValues(
+                        alpha: 0.08,
+                      ),
+                    ),
+                    Center(child: commonLoading()),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── AppBar ────────────────────────────────────────────────────────────────────
+
+class _BotChatAppBar extends StatelessWidget implements PreferredSizeWidget {
+  final String chatName;
+  final String groupIcon;
+  final VoidCallback onRefreshHistory;
+
+  const _BotChatAppBar({
+    required this.chatName,
+    required this.groupIcon,
+    required this.onRefreshHistory,
+  });
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+
+  @override
+  Widget build(BuildContext context) {
+    // Only watch isBotTyping so only the status text rebuilds
+    final isBotTyping = context.select<ChatbotProvider, bool>(
+      (p) => p.isBotTyping,
+    );
+
+    final hasHistory = context.select<ChatbotProvider, bool>(
+      (p) => p.hasHistory,
+    );
+
+    return AppBar(
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      leadingWidth: 50,
+      systemOverlayStyle: systemUI(),
+      leading: IconButton(
+        icon: SvgPicture.asset(
+          AppDirectionality.appDirectionIcon.arrowForBack,
+          height: 30,
+          colorFilter: ColorFilter.mode(
+            AppThemeManage.appTheme.darkWhiteColor,
+            BlendMode.srcIn,
+          ),
+        ),
+        onPressed: () {
+          if (Navigator.canPop(context)) Navigator.pop(context);
+        },
+      ),
+      titleSpacing: 0,
+      title: Row(
+        children: [
+          // Avatar
+          Container(
+            height: SizeConfig.sizedBoxHeight(38),
+            width: SizeConfig.sizedBoxWidth(38),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.appPriSecColor.primaryColor.withValues(
+                alpha: 0.12,
+              ),
+              border: Border.all(
+                color: AppColors.appPriSecColor.primaryColor.withValues(
+                  alpha: 0.3,
+                ),
+              ),
+            ),
+            child: ClipOval(
+              child:
+                  groupIcon.isNotEmpty
+                      ? Image.network(
+                        groupIcon,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => _BotIconFallback(),
+                      )
+                      : _BotIconFallback(),
+            ),
+          ),
+          SizedBox(width: SizeConfig.width(2.5)),
+          // Name + typing status
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                chatName,
+                style: AppTypography.innerText14(
+                  context,
+                ).copyWith(fontWeight: FontWeight.w600),
+              ),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                child:
+                    isBotTyping
+                        ? Text(
+                          'Typing...',
+                          key: const ValueKey('typing'),
+                          style: AppTypography.innerText10(context).copyWith(
+                            color: AppColors.appPriSecColor.primaryColor,
+                            fontSize: 11,
+                          ),
+                        )
+                        : Text(
+                          'Whoxachat AI Assistant',
+                          key: const ValueKey('idle'),
+                          style: AppTypography.innerText10(context).copyWith(
+                            color: AppColors.textColor.textGreyColor,
+                            fontSize: 11,
+                          ),
+                        ),
+              ),
+            ],
+          ),
+        ],
+      ),
+      actions: [
+        if (hasHistory)
+          IconButton(
+            icon: Icon(
+              Icons.history,
+              color: AppThemeManage.appTheme.darkWhiteColor,
+            ),
+            onPressed: onRefreshHistory,
+          ),
+      ],
+    );
+  }
+}
+
+// ─── Bot avatar fallback ───────────────────────────────────────────────────────
+
+class _BotIconFallback extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) => Container(
+    color: AppColors.appPriSecColor.primaryColor.withValues(alpha: 0.1),
+    child: Icon(
+      Icons.smart_toy_outlined,
+      color: AppColors.appPriSecColor.primaryColor,
+      size: 22,
+    ),
+  );
+}
+
+// ─── Message list ──────────────────────────────────────────────────────────────
+
+class _MessageList extends StatelessWidget {
+  final ScrollController scrollController;
+
+  const _MessageList({required this.scrollController});
+
+  @override
+  Widget build(BuildContext context) {
+    final messages = context.select<ChatbotProvider, List<BotMessage>>(
+      (p) => p.messages,
+    );
+    final isBotTyping = context.select<ChatbotProvider, bool>(
+      (p) => p.isBotTyping,
+    );
+    final streamingText = context.select<ChatbotProvider, String?>(
+      (p) => p.streamingText,
+    );
+    final isPaginationLoading = context.select<ChatbotProvider, bool>(
+      (p) => p.isPaginationLoading,
+    );
+
+    if (messages.isEmpty && !isBotTyping) {
+      return Center(
+        child: Text('Chat with AI', style: AppTypography.innerText16(context)),
+      );
+    }
+
+    final itemCount =
+        messages.length + (isBotTyping ? 1 : 0) + (isPaginationLoading ? 1 : 0);
+
+    return ListView.builder(
+      controller: scrollController,
+      reverse: true,
+      padding: SizeConfig.getPaddingSymmetric(horizontal: 16, vertical: 12),
+      itemCount: itemCount,
+      itemBuilder: (context, index) {
+        // Pagination loader at the logical bottom (highest index in reversed list)
+        if (isPaginationLoading &&
+            index == messages.length + (isBotTyping ? 1 : 0)) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
+            child: Center(
+              child: SizedBox(
+                height: 19,
+                width: 19,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    AppColors.appPriSecColor.primaryColor,
+                  ),
+                ),
+              ),
+            ),
+          );
+          // Padding(
+          //   padding: const EdgeInsets.symmetric(vertical: 12),
+          //   child: Center(child: commonLoading()),
+          // );
+        }
+
+        // Typing / streaming bubble at the top (index 0 in reversed list)
+        if (isBotTyping && index == 0) {
+          return _TypingBubble(streamingText: streamingText);
+        }
+
+        final messageIndex =
+            messages.length - 1 - (isBotTyping ? index - 1 : index);
+        return _MessageBubble(message: messages[messageIndex]);
+      },
+    );
+  }
+}
+
+// ─── Input bar ─────────────────────────────────────────────────────────────────
+
+class _InputBar extends StatelessWidget {
+  final TextEditingController msgController;
+  final VoidCallback onSend;
+
+  const _InputBar({required this.msgController, required this.onSend});
+
+  @override
+  Widget build(BuildContext context) {
+    final isBotTyping = context.select<ChatbotProvider, bool>(
+      (p) => p.isBotTyping,
+    );
+
+    return Container(
+      padding: EdgeInsets.only(
+        left: SizeConfig.width(4),
+        right: SizeConfig.width(4),
+        top: SizeConfig.height(1),
+        bottom: SizeConfig.height(1) + MediaQuery.of(context).padding.bottom,
+      ),
+      decoration: BoxDecoration(
+        color: AppThemeManage.appTheme.scaffoldBackColor,
+        border: Border(
+          top: BorderSide(color: AppThemeManage.appTheme.borderColor),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              controller: msgController,
+              minLines: 1,
+              maxLines: 4,
+              keyboardType: TextInputType.multiline,
+              textCapitalization: TextCapitalization.sentences,
+              style: AppTypography.innerText14(context),
+              decoration: InputDecoration(
+                hintText: 'Ask anything...',
+                hintStyle: AppTypography.innerText14(
+                  context,
+                ).copyWith(color: AppColors.textColor.textGreyColor),
+                filled: true,
+                fillColor: AppThemeManage.appTheme.borderColor.withValues(
+                  alpha: 0.5,
+                ),
+                contentPadding: SizeConfig.getPaddingSymmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              onSubmitted: (_) => onSend(),
+            ),
+          ),
+          SizedBox(width: SizeConfig.width(2)),
+          GestureDetector(
+            onTap: isBotTyping ? null : onSend,
+            child: Container(
+              decoration: BoxDecoration(
+                color:
+                    isBotTyping
+                        ? AppColors.appPriSecColor.primaryColor.withValues(
+                          alpha: 0.4,
+                        )
+                        : AppColors.appPriSecColor.primaryColor,
+                shape: BoxShape.circle,
+              ),
+              child: Padding(
+                padding: SizeConfig.getPaddingSymmetric(
+                  horizontal: 13,
+                  vertical: 11,
+                ),
+                child: Image.asset(
+                  AppAssets.send,
+                  color: ThemeColorPalette.getTextColor(
+                    AppColors.appPriSecColor.primaryColor,
+                  ),
+                  height: SizeConfig.sizedBoxHeight(24),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Message bubble ────────────────────────────────────────────────────────────
+
+class _MessageBubble extends StatelessWidget {
+  final BotMessage message;
+
+  const _MessageBubble({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final isBot = message.isBot;
+    return Align(
+      alignment: isBot ? Alignment.centerLeft : Alignment.centerRight,
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth:
+              isBot
+                  ? MediaQuery.of(context).size.width * 0.80
+                  : MediaQuery.of(context).size.width * 0.75,
+        ),
+        margin: EdgeInsets.only(
+          top: SizeConfig.height(0.5),
+          bottom: SizeConfig.height(0.5),
+        ),
+        padding: SizeConfig.getPaddingSymmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color:
+              isBot
+                  ? AppThemeManage.appTheme.borderColor
+                  : AppColors.appPriSecColor.primaryColor,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(12),
+            topRight: const Radius.circular(12),
+            bottomLeft: Radius.circular(isBot ? 0 : 12),
+            bottomRight: Radius.circular(isBot ? 12 : 0),
+          ),
+        ),
+        child: MarkdownBody(
+          data: message.content,
+          selectable: true,
+          styleSheet: MarkdownStyleSheet(
+            p: AppTypography.innerText14(context).copyWith(
+              color:
+                  isBot
+                      ? AppThemeManage.appTheme.textGreyWhite
+                      : ThemeColorPalette.getTextColor(
+                        AppColors.appPriSecColor.primaryColor,
+                      ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Typing bubble ─────────────────────────────────────────────────────────────
+
+class _TypingBubble extends StatelessWidget {
+  final String? streamingText;
+
+  const _TypingBubble({this.streamingText});
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
+        ),
+        margin: EdgeInsets.only(top: SizeConfig.height(0.5)),
+        padding: SizeConfig.getPaddingSymmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppThemeManage.appTheme.borderColor,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(18),
+            topRight: Radius.circular(18),
+            bottomRight: Radius.circular(18),
+            bottomLeft: Radius.circular(4),
+          ),
+        ),
+        child:
+            (streamingText != null && streamingText!.isNotEmpty)
+                ? MarkdownBody(
+                  data: streamingText!,
+                  selectable: true,
+                  styleSheet: MarkdownStyleSheet(
+                    p: AppTypography.innerText14(
+                      context,
+                    ).copyWith(color: AppThemeManage.appTheme.textGreyWhite),
+                  ),
+                )
+                : const _DotsIndicator(),
+      ),
+    );
+  }
+}
+
+// ─── Animated dots ─────────────────────────────────────────────────────────────
+// Kept as StatefulWidget — it owns its own AnimationController, which is correct.
+
+class _DotsIndicator extends StatefulWidget {
+  const _DotsIndicator();
+
+  @override
+  State<_DotsIndicator> createState() => _DotsIndicatorState();
+}
+
+class _DotsIndicatorState extends State<_DotsIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, _) {
+        final v = _ctrl.value;
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: List.generate(3, (i) {
+            final opacity = ((v * 3 - i).clamp(0.0, 1.0) *
+                    (1 - (v * 3 - i - 1).clamp(0.0, 1.0)))
+                .clamp(0.3, 1.0);
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2.5),
+              child: Opacity(
+                opacity: opacity,
+                child: Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: AppColors.textColor.textGreyColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            );
+          }),
+        );
+      },
+    );
+  }
+}

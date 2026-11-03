@@ -1,0 +1,428 @@
+import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:whoxa/featuers/provider/theme_provider.dart';
+import 'package:provider/provider.dart';
+import 'package:whoxa/design/fp_components.dart';
+import 'package:whoxa/design/fp_tokens.dart';
+import 'package:whoxa/featuers/contacts/data/model/contact_model.dart';
+import 'package:whoxa/featuers/contacts/provider/contact_provider.dart';
+
+/// Redesigned People/Contacts surface.
+///
+/// Structural differences from the stock contact list:
+///   * no AppBar + flat ListView — instead a canvas page with a large
+///     title block, an inline search pill that expands, and segmented
+///     On Flickpitch / Invite tabs rendered as a pill switch,
+///   * rows are card groups per initial letter rather than one flat list,
+///   * empty and offline states are designed states, not bare text.
+class FpContactsScreen extends StatefulWidget {
+  const FpContactsScreen({super.key});
+
+  @override
+  State<FpContactsScreen> createState() => _FpContactsScreenState();
+}
+
+class _FpContactsScreenState extends State<FpContactsScreen> {
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+  int _tab = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final p = context.read<ContactListProvider>();
+      if (!p.isLoading) p.initializeContacts();
+    });
+  }
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // theme dependency: rebuild this screen when the theme changes
+    // so the static Fp tokens are re-read (they are not InheritedWidgets).
+    context.watch<ThemeProvider>();
+    final provider = context.watch<ContactListProvider>();
+    final onApp = provider.chatContacts;
+    final invites = provider.inviteContacts;
+    final base = _tab == 0 ? onApp : invites;
+
+    final filtered = _query.isEmpty
+        ? base
+        : base
+            .where((c) =>
+                c.name.toLowerCase().contains(_query.toLowerCase()) ||
+                c.formattedPhoneNumber.contains(_query))
+            .toList();
+
+    return Scaffold(
+      backgroundColor: Fp.ink,
+      body: FpCanvas(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Fp.s24, Fp.s12, Fp.s16, 0),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('PEOPLE', style: Fp.label.copyWith(color: Fp.violetGlow)),
+                        const SizedBox(height: Fp.s4),
+                        Text('Your circle', style: Fp.display),
+                        const SizedBox(height: Fp.s4),
+                        Text(
+                          '${onApp.length} on Flickpitch · ${invites.length} to invite',
+                          style: Fp.caption.copyWith(color: Fp.textMuted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  FpIconTile(
+                    icon: Icons.person_add_alt_1_outlined,
+                    onTap: () => setState(() => _tab = 1),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: Fp.s20),
+            Padding(
+              padding: Fp.pagePad,
+              child: _SearchPill(
+                controller: _search,
+                onChanged: (v) => setState(() => _query = v),
+              ),
+            ),
+            const SizedBox(height: Fp.s16),
+            Padding(
+              padding: Fp.pagePad,
+              child: _Segmented(
+                index: _tab,
+                labels: const ['On Flickpitch', 'Invite'],
+                counts: [onApp.length, invites.length],
+                onChanged: (i) => setState(() => _tab = i),
+              ),
+            ),
+            const SizedBox(height: Fp.s12),
+            Expanded(
+              child: provider.isLoading && base.isEmpty
+                  ? Center(
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation(Fp.violetGlow),
+                      ),
+                    )
+                  : filtered.isEmpty
+                      ? FpEmptyState(
+                          icon: Icons.groups_2_outlined,
+                          title: _query.isEmpty
+                              ? (_tab == 0
+                                  ? 'No one here yet'
+                                  : 'Everyone is already on Flickpitch')
+                              : 'No match for “$_query”',
+                          message: _query.isEmpty
+                              ? 'Contacts who join Flickpitch will appear here automatically.'
+                              : 'Try a different name or number.',
+                        )
+                      : _GroupedList(
+                          contacts: filtered,
+                          onTap: (c) => _openContact(context, c),
+                        ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openContact(BuildContext context, ContactModel contact) {
+    final chatId = contact.chatId;
+    if (chatId != null) {
+      Navigator.pushNamed(
+        context,
+        '/universalChat',
+        arguments: {
+          'chatId': chatId,
+          'userName': contact.name,
+          'userImage': contact.profilePicUrl ?? '',
+        },
+      );
+      return;
+    }
+    // Not on the platform yet — surface a lightweight invite sheet.
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        margin: const EdgeInsets.all(Fp.s12),
+        padding: const EdgeInsets.all(Fp.s24),
+        decoration: BoxDecoration(
+          color: Fp.inkSoft,
+          borderRadius: BorderRadius.circular(Fp.rLg),
+          border: Border.all(color: Fp.hairlineStrong),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(contact.name, style: Fp.h2),
+            const SizedBox(height: Fp.s4),
+            Text(contact.formattedPhoneNumber,
+                style: Fp.body.copyWith(color: Fp.textMuted)),
+            const SizedBox(height: Fp.s20),
+            FpPrimaryButton(
+              label: 'Invite to Flickpitch Business',
+              icon: Icons.send_outlined,
+              onPressed: () {
+                Navigator.pop(context);
+                SharePlus.instance.share(
+                  ShareParams(
+                    subject: 'Join me on Flickpitch Business',
+                    text:
+                        'Hi ${contact.name}, join me on Flickpitch Business — '
+                        'catalog, labels and automatic replies on the chat your '
+                        'customers already use: https://business.flickpitch.com/download/',
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchPill extends StatelessWidget {
+  const _SearchPill({required this.controller, required this.onChanged});
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 52,
+      padding: const EdgeInsets.symmetric(horizontal: Fp.s16),
+      decoration: BoxDecoration(
+        color: Fp.inkRaised.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(Fp.rPill),
+        border: Border.all(color: Fp.hairline),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.search, size: 20, color: Fp.textFaint),
+          const SizedBox(width: Fp.s12),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              onChanged: onChanged,
+              style: Fp.body.copyWith(color: Fp.text),
+              cursorColor: Fp.violet,
+              decoration: InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                hintText: 'Search people or numbers',
+                hintStyle: Fp.body.copyWith(color: Fp.textFaint),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Segmented extends StatelessWidget {
+  const _Segmented({
+    required this.index,
+    required this.labels,
+    required this.counts,
+    required this.onChanged,
+  });
+
+  final int index;
+  final List<String> labels;
+  final List<int> counts;
+  final ValueChanged<int> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Fp.inkRaised.withValues(alpha: 0.6),
+        borderRadius: BorderRadius.circular(Fp.rPill),
+        border: Border.all(color: Fp.hairline),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < labels.length; i++)
+            Expanded(
+              child: GestureDetector(
+                onTap: () => onChanged(i),
+                child: AnimatedContainer(
+                  duration: Fp.base,
+                  curve: Fp.ease,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    gradient: i == index ? Fp.accent : null,
+                    borderRadius: BorderRadius.circular(Fp.rPill),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        labels[i],
+                        style: Fp.bodyStrong.copyWith(
+                          color: i == index ? Colors.white : Fp.textMuted,
+                          fontSize: 13.5,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: i == index
+                              ? Colors.white.withValues(alpha: 0.22)
+                              : Fp.hairlineStrong,
+                          borderRadius: BorderRadius.circular(Fp.rPill),
+                        ),
+                        child: Text('${counts[i]}',
+                            style: Fp.caption.copyWith(
+                              color: i == index ? Colors.white : Fp.textMuted,
+                              fontSize: 10.5,
+                            )),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Groups rows by first letter and renders them as card groups.
+class _GroupedList extends StatelessWidget {
+  const _GroupedList({required this.contacts, required this.onTap});
+
+  final List<ContactModel> contacts;
+  final ValueChanged<ContactModel> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final sorted = [...contacts]..sort(
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    final groups = <String, List<ContactModel>>{};
+    for (final c in sorted) {
+      final key = c.name.trim().isEmpty
+          ? '#'
+          : c.name.trim()[0].toUpperCase();
+      groups.putIfAbsent(key, () => []).add(c);
+    }
+    final keys = groups.keys.toList()..sort();
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(Fp.s16, 0, Fp.s16, 120),
+      itemCount: keys.length,
+      itemBuilder: (context, i) {
+        final key = keys[i];
+        final rows = groups[key]!;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Fp.s8, Fp.s16, Fp.s8, Fp.s8),
+              child: Text(key, style: Fp.label.copyWith(color: Fp.textFaint)),
+            ),
+            FpSurface(
+              padding: EdgeInsets.zero,
+              radius: Fp.rMd,
+              child: Column(
+                children: [
+                  for (var j = 0; j < rows.length; j++)
+                    _ContactRow(
+                      contact: rows[j],
+                      last: j == rows.length - 1,
+                      onTap: () => onTap(rows[j]),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _ContactRow extends StatelessWidget {
+  const _ContactRow({
+    required this.contact,
+    required this.last,
+    required this.onTap,
+  });
+
+  final ContactModel contact;
+  final bool last;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final onPlatform = contact.chatId != null;
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+            horizontal: Fp.s16, vertical: Fp.s12),
+        child: Row(
+          children: [
+            FpAvatar(
+              imageUrl: contact.profilePicUrl,
+              label: contact.name,
+              size: 44,
+              online: false,
+            ),
+            const SizedBox(width: Fp.s16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(contact.name, style: Fp.bodyStrong),
+                  const SizedBox(height: 2),
+                  Text(contact.formattedPhoneNumber,
+                      style: Fp.caption.copyWith(color: Fp.textMuted)),
+                ],
+              ),
+            ),
+            if (onPlatform)
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: Fp.s12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Fp.violet.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(Fp.rPill),
+                ),
+                child: Text('Message',
+                    style: Fp.caption.copyWith(color: Fp.violetGlow)),
+              )
+            else
+              Text('Invite',
+                  style: Fp.caption.copyWith(color: Fp.cyan)),
+          ],
+        ),
+      ),
+    );
+  }
+}

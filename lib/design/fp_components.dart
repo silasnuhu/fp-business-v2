@@ -1,0 +1,726 @@
+import 'dart:math' as math;
+import 'dart:ui';
+
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:whoxa/featuers/provider/theme_provider.dart';
+
+import 'fp_tokens.dart';
+
+/// Aurora canvas: deep ink wash + soft brand orbs. Every redesigned screen sits
+/// on this instead of a flat Scaffold background, which is what makes the app
+/// read as a new product rather than a recoloured template.
+class FpCanvas extends StatelessWidget {
+  const FpCanvas({super.key, required this.child, this.padding});
+
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
+
+  @override
+  Widget build(BuildContext context) {
+    // theme dependency: rebuild this screen when the theme changes
+    // so the static Fp tokens are re-read (they are not InheritedWidgets).
+    context.watch<ThemeProvider>();
+    return DecoratedBox(
+      decoration: BoxDecoration(gradient: Fp.aurora),
+      child: Stack(
+        children: [
+          Positioned(
+            top: -120,
+            right: -90,
+            child: _Orb(size: 280, color: Fp.violet.withValues(alpha: 0.42)),
+          ),
+          Positioned(
+            bottom: -140,
+            left: -110,
+            child: _Orb(size: 320, color: Fp.cyan.withValues(alpha: 0.085)),
+          ),
+          Positioned(
+            top: 180,
+            left: -160,
+            child: _Orb(
+              size: 240,
+              color: Fp.violetDeep.withValues(alpha: 0.24),
+            ),
+          ),
+          SafeArea(
+            child: Padding(padding: padding ?? EdgeInsets.zero, child: child),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Orb extends StatelessWidget {
+  const _Orb({required this.size, required this.color});
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return ImageFiltered(
+      imageFilter: ImageFilter.blur(sigmaX: 70, sigmaY: 70),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+      ),
+    );
+  }
+}
+
+/// Translucent raised surface used for cards, sheets and grouped settings.
+class FpSurface extends StatelessWidget {
+  const FpSurface({
+    super.key,
+    required this.child,
+    this.padding = const EdgeInsets.all(Fp.s20),
+    this.radius = Fp.rLg,
+    this.accentRail,
+    this.onTap,
+    this.border = true,
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+  final double radius;
+  final Color? accentRail;
+  final VoidCallback? onTap;
+  final bool border;
+
+  @override
+  Widget build(BuildContext context) {
+    final content = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: Fp.inkRaised.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(radius),
+        border: border ? Border.all(color: Fp.hairline) : null,
+        boxShadow: Fp.lift,
+      ),
+      child: accentRail == null
+          ? child
+          // IntrinsicHeight is required: this Row is often a direct child of a
+          // ListView/Column (unbounded height). `stretch` without a finite
+          // height throws "BoxConstraints forces an infinite height" and the
+          // whole screen fails to lay out.
+          : IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    width: 3,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          accentRail!,
+                          accentRail!.withValues(alpha: 0.15),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                      borderRadius: BorderRadius.circular(Fp.rPill),
+                    ),
+                  ),
+                  const SizedBox(width: Fp.s16),
+                  Expanded(child: child),
+                ],
+              ),
+            ),
+    );
+
+    if (onTap == null) return content;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(radius),
+        onTap: onTap,
+        child: content,
+      ),
+    );
+  }
+}
+
+/// Primary action. Gradient fill + brand glow, tall enough for one-handed use.
+class FpPrimaryButton extends StatelessWidget {
+  const FpPrimaryButton({
+    super.key,
+    required this.label,
+    this.onPressed,
+    this.icon,
+    this.loading = false,
+    this.expand = true,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+  final IconData? icon;
+  final bool loading;
+  final bool expand;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onPressed != null && !loading;
+    final child = AnimatedOpacity(
+      duration: Fp.fast,
+      opacity: enabled ? 1 : 0.55,
+      child: Row(
+        mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (loading)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation(Fp.onAccent),
+              ),
+            )
+          else if (icon != null)
+            Icon(icon, size: 19, color: Fp.onAccent),
+          if (loading || icon != null) const SizedBox(width: Fp.s12),
+          Text(label, style: Fp.bodyStrong.copyWith(color: Fp.onAccent)),
+        ],
+      ),
+    );
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(Fp.rPill),
+        onTap: enabled ? onPressed : null,
+        child: Container(
+          height: 56,
+          padding: const EdgeInsets.symmetric(horizontal: Fp.s24),
+          decoration: BoxDecoration(
+            gradient: enabled ? Fp.accent : null,
+            color: enabled ? null : Fp.inkRaised,
+            borderRadius: BorderRadius.circular(Fp.rPill),
+            boxShadow: enabled ? Fp.glow(Fp.violet) : null,
+            border: enabled ? null : Border.all(color: Fp.hairline),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// Secondary action: hairline outline on glass.
+class FpGhostButton extends StatelessWidget {
+  const FpGhostButton({
+    super.key,
+    required this.label,
+    this.onPressed,
+    this.icon,
+    this.expand = true,
+  });
+
+  final String label;
+  final VoidCallback? onPressed;
+  final IconData? icon;
+  final bool expand;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(Fp.rPill),
+        onTap: onPressed,
+        child: Container(
+          height: 54,
+          padding: const EdgeInsets.symmetric(horizontal: Fp.s24),
+          decoration: BoxDecoration(
+            color: Fp.inkRaised.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(Fp.rPill),
+            border: Border.all(color: Fp.hairlineStrong),
+          ),
+          child: Row(
+            mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 18, color: Fp.text),
+                const SizedBox(width: Fp.s12),
+              ],
+              Text(label, style: Fp.bodyStrong.copyWith(color: Fp.text)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small uppercase section label with a trailing rule.
+class FpSectionLabel extends StatelessWidget {
+  const FpSectionLabel(this.text, {super.key, this.trailing});
+  final String text;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Text(text.toUpperCase(), style: Fp.label.copyWith(color: Fp.textFaint)),
+        const SizedBox(width: Fp.s12),
+        Expanded(child: Container(height: 1, color: Fp.hairline)),
+        if (trailing != null) ...[const SizedBox(width: Fp.s12), trailing!],
+      ],
+    );
+  }
+}
+
+/// Circular icon action used in headers.
+class FpIconTile extends StatelessWidget {
+  const FpIconTile({
+    super.key,
+    required this.icon,
+    this.onTap,
+    this.badge,
+    this.tint,
+    this.size = 44,
+  });
+
+  final IconData icon;
+  final VoidCallback? onTap;
+  final int? badge;
+  final Color? tint;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = tint ?? Fp.text;
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(Fp.rPill),
+            onTap: onTap,
+            child: Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                color: Fp.inkRaised.withValues(alpha: 0.7),
+                shape: BoxShape.circle,
+                border: Border.all(color: Fp.hairline),
+              ),
+              child: Icon(icon, size: 20, color: c),
+            ),
+          ),
+        ),
+        if (badge != null && badge! > 0)
+          Positioned(right: -2, top: -2, child: FpDot(count: badge!)),
+      ],
+    );
+  }
+}
+
+class FpDot extends StatelessWidget {
+  const FpDot({super.key, required this.count, this.color});
+  final int count;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      constraints: const BoxConstraints(minWidth: 18),
+      decoration: BoxDecoration(
+        color: color ?? Fp.coral,
+        borderRadius: BorderRadius.circular(Fp.rPill),
+        border: Border.all(color: Fp.ink, width: 2),
+      ),
+      child: Text(
+        count > 99 ? '99+' : '$count',
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          fontFamily: 'PoppinsSemibold',
+          fontSize: 10,
+          height: 1.3,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+}
+
+/// Avatar with an optional accent ring (online / story unseen).
+class FpAvatar extends StatelessWidget {
+  const FpAvatar({
+    super.key,
+    this.imageUrl,
+    this.label,
+    this.size = 52,
+    this.ring,
+    this.online = false,
+    this.onTap,
+  });
+
+  final String? imageUrl;
+  final String? label;
+  final double size;
+  final Color? ring;
+  final bool online;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final initials = (label ?? '?')
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .take(2)
+        .map((w) => w[0].toUpperCase())
+        .join();
+
+    Widget core = Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(shape: BoxShape.circle, gradient: Fp.accent),
+      clipBehavior: Clip.antiAlias,
+      child: (imageUrl != null && imageUrl!.isNotEmpty)
+          ? Image.network(
+              imageUrl!,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => _initials(initials),
+            )
+          : _initials(initials),
+    );
+
+    if (ring != null) {
+      core = Container(
+        padding: const EdgeInsets.all(2.5),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: SweepGradient(colors: [ring!, Fp.cyan, ring!]),
+        ),
+        child: core,
+      );
+    }
+
+    if (online) {
+      core = Stack(
+        clipBehavior: Clip.none,
+        children: [
+          core,
+          Positioned(
+            right: 1,
+            bottom: 1,
+            child: Container(
+              width: size * 0.26,
+              height: size * 0.26,
+              decoration: BoxDecoration(
+                color: Fp.mint,
+                shape: BoxShape.circle,
+                border: Border.all(color: Fp.ink, width: 2.5),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (onTap == null) return core;
+    return GestureDetector(onTap: onTap, child: core);
+  }
+
+  Widget _initials(String s) => Center(
+    child: Text(
+      s,
+      style: TextStyle(
+        fontFamily: 'PoppinsSemibold',
+        fontSize: size * 0.34,
+        color: Colors.white,
+      ),
+    ),
+  );
+}
+
+/// Stepper track for the onboarding rail.
+class FpStepRail extends StatelessWidget {
+  const FpStepRail({
+    super.key,
+    required this.count,
+    required this.index,
+    this.onTap,
+  });
+
+  final int count;
+  final int index;
+  final ValueChanged<int>? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: List.generate(count, (i) {
+        final active = i <= index;
+        return Expanded(
+          child: GestureDetector(
+            onTap: onTap == null ? null : () => onTap!(i),
+            child: AnimatedContainer(
+              duration: Fp.base,
+              curve: Fp.ease,
+              height: 4,
+              margin: EdgeInsets.only(right: i == count - 1 ? 0 : Fp.s8),
+              decoration: BoxDecoration(
+                gradient: active ? Fp.accent : null,
+                color: active ? null : Fp.hairlineStrong,
+                borderRadius: BorderRadius.circular(Fp.rPill),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+}
+
+/// Icon + title + subtitle row used across settings/profile/contacts.
+class FpListRow extends StatelessWidget {
+  const FpListRow({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.icon,
+    this.iconTint,
+    this.trailing,
+    this.onTap,
+    this.divider = true,
+  });
+
+  final String title;
+  final String? subtitle;
+  final IconData? icon;
+  final Color? iconTint;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+  final bool divider;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: Fp.s16,
+                vertical: Fp.s12,
+              ),
+              child: Row(
+                children: [
+                  if (icon != null) ...[
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: (iconTint ?? Fp.violet).withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(Fp.rSm),
+                      ),
+                      child: Icon(icon, size: 19, color: iconTint ?? Fp.violet),
+                    ),
+                    const SizedBox(width: Fp.s16),
+                  ],
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title, style: Fp.bodyStrong),
+                        if (subtitle != null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            subtitle!,
+                            style: Fp.caption.copyWith(color: Fp.textMuted),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  ?trailing,
+                ],
+              ),
+            ),
+            if (divider)
+              Divider(
+                height: 1,
+                thickness: 1,
+                color: Fp.hairline,
+                indent: icon == null ? Fp.s16 : 72,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Empty state used by lists (chats, calls, contacts, search).
+class FpEmptyState extends StatelessWidget {
+  const FpEmptyState({
+    super.key,
+    required this.icon,
+    required this.title,
+    this.message,
+    this.action,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? message;
+  final Widget? action;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(Fp.s32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 96,
+              height: 96,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [
+                    Fp.violet.withValues(alpha: 0.28),
+                    Fp.cyan.withValues(alpha: 0.10),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                border: Border.all(color: Fp.hairline),
+              ),
+              child: Icon(icon, size: 38, color: Fp.violetGlow),
+            ),
+            const SizedBox(height: Fp.s24),
+            Text(title, textAlign: TextAlign.center, style: Fp.h2),
+            if (message != null) ...[
+              const SizedBox(height: Fp.s8),
+              Text(
+                message!,
+                textAlign: TextAlign.center,
+                style: Fp.body.copyWith(color: Fp.textMuted),
+              ),
+            ],
+            if (action != null) ...[const SizedBox(height: Fp.s24), action!],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// WhatsApp-style chat wallpaper: a faint repeating doodle pattern behind the
+/// conversation, so the thread reads as a surface rather than a flat list.
+/// Painted (not an asset) so it stays crisp at any density and follows the
+/// light/dark tokens.
+class FpChatBackdrop extends StatelessWidget {
+  const FpChatBackdrop({super.key, required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: ColoredBox(
+            color: Fp.ink,
+            // The real hand-drawn doodle sheet, tiled. It is the wallpaper
+            // people actually expect; the painter below is only a fallback
+            // for the (impossible in a healthy build) case where the asset
+            // fails to decode.
+            child: Image.asset(
+              'assets/images/chat_doodle.jpg',
+              repeat: ImageRepeat.repeat,
+              fit: BoxFit.none,
+              alignment: Alignment.topLeft,
+              filterQuality: FilterQuality.medium,
+              color: Fp.dark ? Colors.black.withValues(alpha: 0.55) : null,
+              colorBlendMode: Fp.dark ? BlendMode.darken : BlendMode.dst,
+              errorBuilder: (_, _, _) =>
+                  CustomPaint(painter: _DoodlePainter()),
+            ),
+          ),
+        ),
+        child,
+      ],
+    );
+  }
+}
+
+class _DoodlePainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Distinct enough to read as a wallpaper behind white bubbles, quiet
+    // enough not to fight the message text.
+    final tint = (Fp.dark ? Colors.white : Colors.black).withValues(
+      alpha: 0.16,
+    );
+    final stroke = Paint()
+      ..color = tint
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.7;
+    final fill = Paint()..color = tint;
+
+    const cell = 86.0;
+    final cols = (size.width / cell).ceil() + 1;
+    final rows = (size.height / cell).ceil() + 1;
+
+    for (var r = 0; r < rows; r++) {
+      for (var c = 0; c < cols; c++) {
+        final cx = c * cell + (r.isEven ? cell / 2 : cell / 4);
+        final cy = r * cell + (c.isEven ? cell / 2 : cell / 3);
+        switch ((r * 7 + c * 3) % 6) {
+          case 0: // ring
+            canvas.drawCircle(Offset(cx, cy), 9, stroke);
+            break;
+          case 1: // dot trio
+            canvas.drawCircle(Offset(cx, cy), 1.8, fill);
+            canvas.drawCircle(Offset(cx + 7, cy + 6), 1.4, fill);
+            canvas.drawCircle(Offset(cx - 6, cy + 7), 1.2, fill);
+            break;
+          case 2: // arc
+            canvas.drawArc(
+              Rect.fromCircle(center: Offset(cx, cy), radius: 11),
+              math.pi * 0.25,
+              math.pi * 1.15,
+              false,
+              stroke,
+            );
+            break;
+          case 3: // zigzag
+            final path = Path()
+              ..moveTo(cx - 10, cy)
+              ..lineTo(cx - 3, cy - 6)
+              ..lineTo(cx + 4, cy + 5)
+              ..lineTo(cx + 11, cy - 2);
+            canvas.drawPath(path, stroke);
+            break;
+          case 4: // plus
+            canvas.drawLine(Offset(cx - 5, cy), Offset(cx + 5, cy), stroke);
+            canvas.drawLine(Offset(cx, cy - 5), Offset(cx, cy + 5), stroke);
+            break;
+          default: // small square outline
+            canvas.drawRect(
+              Rect.fromCenter(center: Offset(cx, cy), width: 12, height: 12),
+              stroke,
+            );
+        }
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DoodlePainter oldDelegate) => false;
+}

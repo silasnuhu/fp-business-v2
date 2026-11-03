@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Cleartext allowed by base-config only. The old <domain-config> repeated the
+     literal placeholder "YOUR_SERVER_HOST" twice, which fails lintVitalRelease
+     ("Duplicate domain names are not allowed") and blocked every release build. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

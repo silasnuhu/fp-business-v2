@@ -1,0 +1,153 @@
+import 'package:uuid/uuid.dart';
+import 'package:whoxa/featuers/ai_assistant/provider/ai_assistant_provider.dart';
+import 'package:whoxa/featuers/chat/data/chats_model.dart' as chats;
+import 'package:whoxa/widgets/global.dart' as global;
+
+/// Canned Q&A shown inside the AI Assistant chat for demo accounts. Demo
+/// builds have no live provider key, so [AiAssistantDemoMessages.build]
+/// is rendered instead of the real `GET /messages/:conversationId` page
+/// for this conversation — see `ChatProvider._fetchMessagesPage`. Sending
+/// is also blocked for this chat in demo mode (`universal_chat_screen.dart`
+/// `_sendTextMessage`), so this is a read-only transcript.
+class AiAssistantDemoMessages {
+  AiAssistantDemoMessages._();
+
+  static const List<({String user, String ai})> _qa = [
+    (
+      user: "What makes Whoxa different from other messaging apps?",
+      ai:
+          "Whoxa is built around three things most other apps treat as an afterthought: privacy, control, and a genuinely useful built-in AI Assistant. Every one-to-one and group chat is end-to-end encrypted by default, so your messages stay between you and the people in the conversation - not stored in plain text on a server somewhere. On top of that, Whoxa gives you fine-grained control over your own visibility (who sees your online status, last seen, and profile info), lets you organize conversations with starred messages and archived chats instead of losing them in a long list, and bundles in an AI Assistant you can chat with directly inside the app for quick answers, writing help, or lookups - no need to switch to a different app. It is designed to feel fast and familiar like the messaging apps you already know, while giving you more say over your own data and experience.",
+    ),
+    (
+      user: "What are the main features available in Whoxa?",
+      ai:
+          "Whoxa covers everything you would expect from a modern messaging app, plus a few extras. Core features include one-to-one and group chats, voice and video calling, status/story updates that disappear after 24 hours, message reactions, replies and forwarding, and media sharing (photos, videos, documents, voice notes). For organization, you get starred messages, archived chats, and chat search. For privacy and safety, there is end-to-end encryption, granular control over last seen/online status, and the ability to block or report users. And unique to Whoxa is the built-in AI Assistant - a chat you can open anytime to ask questions, get help drafting messages, summarize text, or look things up, all without leaving the app. Together these make Whoxa a single place for both personal conversations and quick day-to-day help.",
+    ),
+    (
+      user: "How does Whoxa keep private conversations secure?",
+      ai:
+          "Whoxa protects your conversations with end-to-end encryption, which means messages are encrypted on your device before they are sent and can only be decrypted by the person or group you are chatting with - not by Whoxa's own servers in between. Calls (voice and video) are handled the same way, using secure peer-to-peer connections wherever possible so audio and video do not sit on a server unnecessarily. Beyond encryption, you control who can reach you and what they can see: you can block or report anyone who bothers you, hide your last seen and online status, and manage exactly who is added to your groups. If you ever need to walk back a message, you can delete it for everyone, and archived or starred chats stay just as protected as your regular chat list. The goal is that security is not a setting you have to hunt for - it is on by default.",
+    ),
+    (
+      user: "How can I create and manage a group chat in Whoxa?",
+      ai:
+          "To create a group chat in Whoxa, tap the new chat or new group option, pick the contacts you want to add, give the group a name (and optionally a group photo), and you are set - the group is created instantly and everyone added can start chatting right away. As a group admin, you can add or remove members, promote other members to admin, edit the group name and photo, and set who is allowed to send messages or change group info. You can also mute notifications for a busy group without leaving it, pin important messages so they stay visible at the top, and archive the group chat if it goes quiet for a while without losing the history. If a group is no longer useful, admins can delete it entirely, or individual members can simply leave whenever they want.",
+    ),
+    (
+      user: "What can I do during a voice or video call in Whoxa?",
+      ai:
+          "During a voice or video call in Whoxa, you get all the controls you would expect from a proper calling app: you can mute or unmute your microphone, turn your camera on or off, switch between your front and back camera, and switch audio output between speaker, earpiece, or a connected headset. Video calls also support switching to a full-screen view of whoever is speaking, and you can minimize the call to keep chatting in other parts of the app while the call keeps running in the background. Calls are carried over a secure peer-to-peer connection for better quality and privacy, and you will see a clear call timer and connection status throughout. If you need to step away, you can end the call cleanly at any point, and missed or ended calls show up in your call history so you can call back easily.",
+    ),
+    (
+      user: "How do status and story features work in Whoxa?",
+      ai:
+          "Status (also called story) updates in Whoxa let you share a photo, video, or text update that your contacts can see for 24 hours before it automatically disappears. To post one, open the status tab, choose your photo, video, or text, add captions, stickers, or drawings if you like, and share it - it is that simple. You can control who sees each status update through your privacy settings, choosing between all your contacts, specific people, or everyone except certain contacts you exclude. As people view your status, you can see exactly who has viewed it and when, and you can reply directly to someone's status, which opens a private chat about it. Status updates are a lightweight way to share moments without cluttering your regular chats, and once the 24 hours are up, they are gone unless you choose to save them yourself.",
+    ),
+    (
+      user: "How can I control who can see my online status and last seen?",
+      ai:
+          "Whoxa gives you dedicated privacy settings for exactly this. In the privacy section of your settings, you can choose who sees your last seen and online status - options typically include everyone, only your contacts, or nobody at all. You can set this independently from other privacy controls like who sees your profile photo, about info, or status updates, so you are not forced into an all-or-nothing choice. Keep in mind that in most messaging apps, including Whoxa, if you hide your own last seen and online status from others, you also stop seeing theirs - it works both ways, which keeps things fair. These settings can be changed at any time, so if you want more visibility for close contacts and less for everyone else, you have the flexibility to adjust it whenever you need to.",
+    ),
+    (
+      user: "What happens when I block or report someone in Whoxa?",
+      ai:
+          "When you block someone in Whoxa, they immediately lose the ability to call you, send you new messages, or see updates like your last seen, online status, profile photo, or status posts - your existing chat history stays on your device, but the conversation effectively goes silent from their side. Blocking is private: the other person is not notified that you blocked them. If you also report someone, that sends details about the account to Whoxa's trust and safety systems for review, which helps identify accounts that are violating the app's terms, such as sending spam, harassment, or abusive content - this is separate from blocking and you can do either one independently, or both together for serious cases. You can review and manage your blocked contacts at any time from your privacy or settings menu, and unblock someone if you change your mind, which restores normal messaging and calling between you.",
+    ),
+    (
+      user:
+          "How can starred messages and archived chats help me organize conversations?",
+      ai:
+          "Starred messages and archived chats are two simple tools Whoxa gives you to keep a busy chat list under control. Starring lets you flag any important message - an address, a confirmation code, a heartfelt note, a link you want to find later - by long-pressing it and tapping star; all your starred messages across every chat are then collected in one dedicated screen, so you never have to scroll back through a long conversation to find something important again. Archiving works at the chat level: if a conversation is not urgent right now but you do not want to delete it, archiving tucks it out of your main chat list while keeping every message intact, and it automatically reappears in your main list the moment a new message arrives. Used together, starring keeps key details easy to find and archiving keeps your main chat list focused on what is actually active, without ever losing data.",
+    ),
+    (
+      user: "How can the Whoxa AI Assistant help me while chatting?",
+      ai:
+          "The Whoxa AI Assistant lives right inside the app as its own chat, so you can get help without ever leaving your conversations. You can ask it questions on pretty much anything, have it help you write or polish a message before you send it, summarize a long chat or article so you get the key points quickly, translate text into another language, or even look up things like the weather, current news, or general information from the web when you need an up-to-date answer. It is especially handy in the middle of a busy conversation - say you need a quick fact to settle a debate in a group chat, or want a more polished way to phrase a reply to a client - you can just open the AI Assistant chat, ask, and bring the answer straight back. Because it works like any other chat in Whoxa, it feels natural and fast rather than like a separate tool bolted on the side.",
+    ),
+  ];
+
+  /// Builds the fixed demo transcript for the AI Assistant chat, oldest
+  /// first, timestamped so it reads as a conversation that already happened.
+  static List<chats.Records> build({
+    required int chatId,
+    required int myUserId,
+    required int botUserId,
+  }) {
+    const uuid = Uuid();
+    final now = DateTime.now();
+
+    final myName =
+        [global.firstName, global.lastName]
+            .where((s) => s.trim().isNotEmpty)
+            .join(' ')
+            .trim();
+    final myUser = chats.User(
+      userId: myUserId,
+      userName: global.userName,
+      fullName: myName.isNotEmpty ? myName : global.userName,
+      profilePic: global.userProfile,
+    );
+    final botUser = chats.User(
+      userId: botUserId,
+      userName: AiAssistantProvider.botUserName,
+      fullName: AiAssistantProvider.botDisplayName,
+    );
+
+    chats.Records makeRecord({
+      required int id,
+      required int senderId,
+      required chats.User user,
+      required String body,
+      required int minutesAgo,
+    }) {
+      final createdAt =
+          now.subtract(Duration(minutes: minutesAgo)).toIso8601String();
+      return chats.Records(
+        messageId: id,
+        chatId: chatId,
+        senderId: senderId,
+        messageType: 'text',
+        messageContent: body,
+        createdAt: createdAt,
+        updatedAt: createdAt,
+        messageSeenStatus: 'read',
+        pinned: false,
+        stared: false,
+        deletedForEveryone: false,
+        isEdited: false,
+        isFollowing: true,
+        user: user,
+        tempId: uuid.v4(),
+        sendingStatus: chats.MessageSendingStatus.sent,
+      );
+    }
+
+    final records = <chats.Records>[];
+    var seq = 1;
+    final totalTurns = _qa.length * 2;
+    for (var i = 0; i < _qa.length; i++) {
+      final pair = _qa[i];
+      final userMinutesAgo = (totalTurns - i * 2) * 2;
+      final aiMinutesAgo = userMinutesAgo - 1;
+      records.add(
+        makeRecord(
+          id: seq++,
+          senderId: myUserId,
+          user: myUser,
+          body: pair.user,
+          minutesAgo: userMinutesAgo,
+        ),
+      );
+      records.add(
+        makeRecord(
+          id: seq++,
+          senderId: botUserId,
+          user: botUser,
+          body: pair.ai,
+          minutesAgo: aiMinutesAgo,
+        ),
+      );
+    }
+    return records;
+  }
+}

@@ -1,0 +1,402 @@
+import 'package:flutter/material.dart';
+import 'package:whoxa/dependency_injection.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:provider/provider.dart';
+import 'package:whoxa/core/api/api_client.dart';
+import 'package:whoxa/design/fp_components.dart';
+import 'package:whoxa/design/fp_tokens.dart';
+import 'package:whoxa/featuers/provider/theme_provider.dart';
+
+/// WhatsApp-Web-style "link a browser".
+///
+/// The web login page shows a QR that encodes
+/// `https://web.flickpitch.com/link-device?sid=<uuid>&key=<secret>`.
+/// This screen scans it, asks the account holder to confirm, then approves the
+/// pairing. The browser picks up a normal access token on its next poll and
+/// then appears under linked devices like any other session.
+enum _Stage { scanning, confirming, working, done, failed }
+
+class FpLinkDeviceScreen extends StatefulWidget {
+  const FpLinkDeviceScreen({super.key});
+
+  @override
+  State<FpLinkDeviceScreen> createState() => _FpLinkDeviceScreenState();
+}
+
+class _FpLinkDeviceScreenState extends State<FpLinkDeviceScreen> {
+  final ApiClient _api = getIt<ApiClient>();
+
+  _Stage _stage = _Stage.scanning;
+  String? _sid;
+  String? _secret;
+  String? _browser;
+  String? _ip;
+  String? _error;
+  bool _handled = false;
+
+  @override
+  Widget build(BuildContext context) {
+    context.watch<ThemeProvider>();
+    return Scaffold(
+      backgroundColor: Fp.ink,
+      body: FpCanvas(
+        child: SafeArea(
+          child: Column(
+            children: [
+              _header(),
+              Expanded(child: _body()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _header() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(Fp.s24, Fp.s16, Fp.s16, Fp.s8),
+      child: Row(
+        children: [
+          Expanded(child: Text('Linked devices', style: Fp.h2)),
+          IconButton(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.close),
+            color: Fp.textMuted,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _body() {
+    switch (_stage) {
+      case _Stage.scanning:
+        return _scanner();
+      case _Stage.confirming:
+        return _confirm();
+      case _Stage.working:
+        return _centered(
+          icon: Icons.sync,
+          title: 'Linking browser…',
+          body: 'Hold on a moment.',
+          busy: true,
+        );
+      case _Stage.done:
+        return _centered(
+          icon: Icons.check_circle_outline,
+          tint: Fp.mint,
+          title: 'Browser linked',
+          body: 'That browser is now signed in. You can remove it any time from Linked devices.',
+          actionLabel: 'Done',
+          onAction: () => Navigator.pop(context),
+        );
+      case _Stage.failed:
+        return _centered(
+          icon: Icons.error_outline,
+          tint: Fp.coral,
+          title: 'Could not link',
+          body: _error ?? 'That QR code is not valid any more.',
+          actionLabel: 'Try again',
+          onAction: _reset,
+        );
+    }
+  }
+
+  Widget _scanner() {
+    return Column(
+      children: [
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(Fp.s24),
+            child: MobileScanner(
+              onDetect: _onDetect,
+              errorBuilder: (context, error) => _centered(
+                icon: Icons.no_photography_outlined,
+                tint: Fp.coral,
+                title: 'Camera unavailable',
+                body: 'Allow camera access for Flickpitch, then reopen this screen to scan the code.',
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(Fp.s24, Fp.s20, Fp.s24, Fp.s24),
+          child: Column(
+            children: [
+              Text(
+                'Point at the QR code',
+                style: Fp.h2,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: Fp.s8),
+              Text(
+                'Open web.flickpitch.com on your computer and scan the code shown on the login screen.',
+                style: Fp.body.copyWith(color: Fp.textMuted),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _confirm() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(Fp.s24),
+      child: Column(
+        children: [
+          const SizedBox(height: Fp.s8),
+          Container(
+            width: 74,
+            height: 74,
+            decoration: BoxDecoration(
+              color: Fp.violetGlow.withValues(alpha: 0.14),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(Icons.laptop_mac, color: Fp.violetGlow, size: 34),
+          ),
+          const SizedBox(height: Fp.s20),
+          Text('Link this browser?', style: Fp.h2, textAlign: TextAlign.center),
+          const SizedBox(height: Fp.s8),
+          Text(
+            'Only continue if you started this on your own computer.',
+            style: Fp.body.copyWith(color: Fp.textMuted),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: Fp.s16),
+          Container(
+            padding: const EdgeInsets.all(Fp.s16),
+            decoration: BoxDecoration(
+              color: Fp.inkRaised,
+              borderRadius: BorderRadius.circular(Fp.s16),
+              border: Border.all(color: Fp.hairline),
+            ),
+            child: Column(
+              children: [
+                _kv('Browser', _browser ?? 'Unknown device'),
+                const SizedBox(height: Fp.s8),
+                _kv('Network', _ip ?? 'Unknown'),
+              ],
+            ),
+          ),
+          const SizedBox(height: Fp.s24),
+          SizedBox(
+            height: 54,
+            width: double.infinity,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(Fp.rPill),
+                onTap: _approve,
+                child: Container(
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    gradient: Fp.accent,
+                    borderRadius: BorderRadius.circular(Fp.rPill),
+                  ),
+                  child: Text(
+                    'Link this browser',
+                    style: Fp.bodyStrong.copyWith(color: Fp.onAccent),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: Fp.s8),
+          TextButton(
+            onPressed: _rejectAndReset,
+            child: Text(
+              'Not me — cancel',
+              style: Fp.bodyStrong.copyWith(color: Fp.textMuted),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _kv(String k, String v) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 92,
+        child: Text(k, style: Fp.label.copyWith(color: Fp.textMuted)),
+      ),
+      Expanded(
+        child: Text(
+          v,
+          style: Fp.bodyStrong.copyWith(fontSize: 13),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    ],
+  );
+
+  Widget _centered({
+    required IconData icon,
+    required String title,
+    required String body,
+    Color? tint,
+    bool busy = false,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.all(Fp.s24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (busy)
+            const SizedBox(
+              width: 30,
+              height: 30,
+              child: CircularProgressIndicator(strokeWidth: 2.6),
+            )
+          else
+            Icon(icon, size: 56, color: tint ?? Fp.violetGlow),
+          const SizedBox(height: Fp.s16),
+          Text(title, style: Fp.h2, textAlign: TextAlign.center),
+          const SizedBox(height: Fp.s8),
+          Text(
+            body,
+            style: Fp.body.copyWith(color: Fp.textMuted),
+            textAlign: TextAlign.center,
+          ),
+          if (actionLabel != null) ...[
+            const SizedBox(height: Fp.s24),
+            SizedBox(
+              height: 52,
+              width: double.infinity,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(Fp.rPill),
+                  onTap: onAction,
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      gradient: Fp.accent,
+                      borderRadius: BorderRadius.circular(Fp.rPill),
+                    ),
+                    child: Text(
+                      actionLabel,
+                      style: Fp.bodyStrong.copyWith(color: Fp.onAccent),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _reset() {
+    setState(() {
+      _stage = _Stage.scanning;
+      _handled = false;
+      _error = null;
+      _sid = null;
+      _secret = null;
+      _browser = null;
+      _ip = null;
+    });
+  }
+
+  Future<void> _onDetect(BarcodeCapture capture) async {
+    if (_handled || _stage != _Stage.scanning) return;
+    if (capture.barcodes.isEmpty) return;
+    final raw = capture.barcodes.first.rawValue;
+    if (raw == null || raw.isEmpty) return;
+
+    final parsed = _parsePayload(raw);
+    if (parsed == null) return; // not one of our codes — keep scanning
+    _handled = true;
+
+    setState(() {
+      _sid = parsed.$1;
+      _secret = parsed.$2;
+      _stage = _Stage.working;
+    });
+
+    try {
+      final res = await _api.request(
+        '/auth/qr/${parsed.$1}/scan',
+        method: 'POST',
+        body: {'secret': parsed.$2},
+      );
+      final data = (res is Map && res['data'] is Map)
+          ? res['data'] as Map
+          : const {};
+      if (!mounted) return;
+      setState(() {
+        _browser = data['browser'] as String?;
+        _ip = data['ip'] as String?;
+        _stage = _Stage.confirming;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'This code expired or was already used. Ask the browser for a new one.';
+        _stage = _Stage.failed;
+        _handled = false;
+      });
+    }
+  }
+
+  /// Returns (sessionId, secret), or null when the payload is not ours.
+  (String, String)? _parsePayload(String raw) {
+    try {
+      final uri = Uri.parse(raw);
+      final sid = uri.queryParameters['sid'];
+      final key = uri.queryParameters['key'];
+      if (sid == null || key == null) return null;
+      if (!sid.contains('-') || key.length < 16) return null;
+      return (sid, key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _approve() async {
+    final sid = _sid;
+    final secret = _secret;
+    if (sid == null || secret == null) return;
+    setState(() => _stage = _Stage.working);
+    try {
+      await _api.request(
+        '/auth/qr/$sid/approve',
+        method: 'POST',
+        body: {'secret': secret},
+      );
+      if (!mounted) return;
+      setState(() => _stage = _Stage.done);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _error = 'We could not approve this browser. Try again.';
+        _stage = _Stage.failed;
+      });
+    }
+  }
+
+  Future<void> _rejectAndReset() async {
+    final sid = _sid;
+    final secret = _secret;
+    if (sid != null && secret != null) {
+      try {
+        await _api.request(
+          '/auth/qr/$sid/reject',
+          method: 'POST',
+          body: {'secret': secret},
+        );
+      } catch (_) {
+        // best effort — the code expires on its own anyway
+      }
+    }
+    _reset();
+  }
+}

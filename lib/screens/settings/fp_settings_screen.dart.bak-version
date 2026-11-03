@@ -1,0 +1,425 @@
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:whoxa/design/fp_components.dart';
+import 'package:whoxa/design/fp_tokens.dart';
+import 'package:whoxa/featuers/auth/provider/auth_provider.dart';
+import 'package:whoxa/featuers/provider/theme_provider.dart';
+import 'package:whoxa/core/services/app_content_service.dart';
+import 'package:whoxa/featuers/subscription/widgets/subscription_settings_tile.dart';
+import 'package:whoxa/screens/settings/settings.dart' show appLanguagePopup;
+import 'package:whoxa/screens/settings/terms_policy.dart';
+import 'package:whoxa/utils/preference_key/constant/app_routes.dart';
+import 'package:whoxa/widgets/global.dart'
+    show termsConditionText, privacyPoicyText;
+
+/// Redesigned Settings / "You" surface.
+///
+/// Structural differences from the stock settings screen:
+///   * grouped cards with accent rails and section headers, not one long
+///     ListView with dividers,
+///   * destructive actions live in their own card at the bottom, separated
+///     from everyday settings by a labelled section,
+///   * confirmation is a designed sheet that states the consequence, rather
+///     than the old generic dialog.
+class FpSettingsScreen extends StatelessWidget {
+  const FpSettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // theme dependency: rebuild this screen when the theme changes
+    // so the static Fp tokens are re-read (they are not InheritedWidgets).
+    context.watch<ThemeProvider>();
+    return Scaffold(
+      backgroundColor: Fp.ink,
+      body: FpCanvas(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(Fp.s24, Fp.s12, Fp.s24, 120),
+          children: [
+            Text(
+              'YOU',
+              style: Fp.label.copyWith(
+                color: Fp.violetGlow,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: Fp.s4),
+            Text('Settings', style: Fp.display),
+            const SizedBox(height: Fp.s24),
+
+            _Group(
+              label: 'Account',
+              children: [
+                FpListRow(
+                  title: 'Your profile',
+                  subtitle: 'Photo, name, username',
+                  icon: Icons.person_outline,
+                  onTap: () => Navigator.pushNamed(context, AppRoutes.profile),
+                ),
+                FpListRow(
+                  title: 'Status & bio',
+                  subtitle: 'What people see about you',
+                  icon: Icons.notes_outlined,
+                  iconTint: Fp.cyan,
+                  onTap: () => Navigator.pushNamed(context, AppRoutes.bio),
+                ),
+                FpListRow(
+                  title: 'Starred messages',
+                  subtitle: 'Saved for later',
+                  icon: Icons.star_outline,
+                  iconTint: Fp.amber,
+                  onTap: () =>
+                      Navigator.pushNamed(context, AppRoutes.starredMessages),
+                ),
+                FpListRow(
+                  title: 'Blocked contacts',
+                  subtitle: 'People who cannot reach you',
+                  icon: Icons.block_outlined,
+                  iconTint: Fp.coral,
+                  divider: false,
+                  onTap: () => Navigator.pushNamed(context, AppRoutes.block),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: Fp.s24),
+            _Group(
+              label: 'Appearance',
+              children: [
+                FpListRow(
+                  title: 'Notifications',
+                  subtitle: 'Inbox and delivery',
+                  icon: Icons.notifications_none_rounded,
+                  iconTint: Fp.amber,
+                  onTap: () =>
+                      Navigator.pushNamed(context, AppRoutes.notification),
+                ),
+                _DarkModeRow(),
+                FpListRow(
+                  title: 'Theme colour',
+                  subtitle: 'Accent used across the app',
+                  icon: Icons.palette_outlined,
+                  iconTint: Fp.violet,
+                  divider: false,
+                  onTap: () =>
+                      Navigator.pushNamed(context, AppRoutes.themeColorPicker),
+                ),
+              ],
+            ),
+
+            // Google Play / App Store subscription (mobile store builds only).
+            // Hidden entirely when the admin switches membership off.
+            if (defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.iOS)
+              FutureBuilder<void>(
+                future: AppContentService.instance.load(),
+                builder: (context, _) {
+                  if (!AppContentService.instance.membershipEnabled) {
+                    return const SizedBox.shrink();
+                  }
+                  return Column(
+                    children: [
+                      const SizedBox(height: Fp.s24),
+                      const SubscriptionSettingsTile(),
+                    ],
+                  );
+                },
+              ),
+
+            const SizedBox(height: Fp.s24),
+            _Group(
+              label: 'Privacy & legal',
+              children: [
+                FpListRow(
+                  title: 'App language',
+                  subtitle: 'Language used across the app',
+                  icon: Icons.translate,
+                  iconTint: Fp.violet,
+                  onTap: () => appLanguagePopup(context),
+                ),
+                FpListRow(
+                  title: 'Terms & conditions',
+                  subtitle: 'The rules for using Flickpitch',
+                  icon: Icons.description_outlined,
+                  iconTint: Fp.textMuted,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PrivacyWebView(
+                        title: 'Terms & conditions',
+                        htmlContent: termsConditionText,
+                      ),
+                    ),
+                  ),
+                ),
+                FpListRow(
+                  title: 'Privacy policy',
+                  subtitle: 'What we collect and why',
+                  icon: Icons.privacy_tip_outlined,
+                  iconTint: Fp.textMuted,
+                  divider: false,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => PrivacyWebView(
+                        title: 'Privacy policy',
+                        htmlContent: privacyPoicyText,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: Fp.s24),
+            _Group(
+              label: 'Session',
+              children: [
+                FpListRow(
+                  title: 'Linked devices',
+                  subtitle: 'Scan a QR to log in on the web',
+                  icon: Icons.laptop_mac_outlined,
+                  iconTint: Fp.cyan,
+                  onTap: () =>
+                      Navigator.pushNamed(context, AppRoutes.linkDevice),
+                ),
+                FpListRow(
+                  title: 'Log out',
+                  subtitle: 'You can sign back in any time',
+                  icon: Icons.logout,
+                  iconTint: Fp.textMuted,
+                  divider: false,
+                  onTap: () => _confirm(
+                    context,
+                    title: 'Log out of Flickpitch?',
+                    body: 'Your chats stay on your account. You will need to sign in again on this device.',
+                    confirmLabel: 'Log out',
+                    destructive: false,
+                    onConfirm: () async {
+                      await context.read<AuthProvider>().handleLogout(context);
+                    },
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: Fp.s24),
+            _Group(
+              label: 'Danger zone',
+              children: [
+                FpListRow(
+                  title: 'Delete account',
+                  subtitle: 'Permanently removes your profile and chats',
+                  icon: Icons.delete_outline,
+                  iconTint: Fp.coral,
+                  divider: false,
+                  onTap: () => _confirm(
+                    context,
+                    title: 'Delete your account?',
+                    body: 'This permanently deletes your profile, messages and media. It cannot be undone.',
+                    confirmLabel: 'Delete account',
+                    destructive: true,
+                    onConfirm: () async {
+                      await context.read<AuthProvider>().handleAccountDeletion(
+                        context,
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: Fp.s32),
+            Center(
+              child: Column(
+                children: [
+                  Text(
+                    'FLICKPITCH',
+                    style: Fp.label.copyWith(
+                      color: Fp.textFaint,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Talk easy.',
+                    style: Fp.caption.copyWith(color: Fp.textFaint),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static Future<void> _confirm(
+    BuildContext context, {
+    required String title,
+    required String body,
+    required String confirmLabel,
+    required bool destructive,
+    required Future<void> Function() onConfirm,
+  }) async {
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(Fp.s12),
+        padding: const EdgeInsets.all(Fp.s24),
+        decoration: BoxDecoration(
+          color: Fp.inkSoft,
+          borderRadius: BorderRadius.circular(Fp.rLg),
+          border: Border.all(color: Fp.hairlineStrong),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: (destructive ? Fp.coral : Fp.violet).withValues(
+                  alpha: 0.16,
+                ),
+                borderRadius: BorderRadius.circular(Fp.rSm),
+              ),
+              child: Icon(
+                destructive ? Icons.warning_amber_rounded : Icons.logout,
+                color: destructive ? Fp.coral : Fp.violetGlow,
+              ),
+            ),
+            const SizedBox(height: Fp.s16),
+            Text(title, style: Fp.h2),
+            const SizedBox(height: Fp.s8),
+            Text(body, style: Fp.body.copyWith(color: Fp.textMuted)),
+            const SizedBox(height: Fp.s24),
+            SizedBox(
+              height: 54,
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(Fp.rPill),
+                  onTap: () => Navigator.pop(ctx, true),
+                  child: Container(
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      gradient: destructive
+                          ? const LinearGradient(
+                              colors: [Fp.coral, Color(0xFFD7263D)],
+                            )
+                          : Fp.accent,
+                      borderRadius: BorderRadius.circular(Fp.rPill),
+                    ),
+                    child: Text(
+                      confirmLabel,
+                      style: Fp.bodyStrong.copyWith(color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: Fp.s8),
+            Center(
+              child: TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(
+                  'Cancel',
+                  style: Fp.bodyStrong.copyWith(color: Fp.textMuted),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (ok == true) await onConfirm();
+  }
+}
+
+class _Group extends StatelessWidget {
+  const _Group({required this.label, required this.children});
+  final String label;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: Fp.s8, bottom: Fp.s8),
+          child: Text(
+            label.toUpperCase(),
+            style: Fp.label.copyWith(
+              color: Fp.textFaint,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        FpSurface(
+          padding: EdgeInsets.zero,
+          radius: Fp.rMd,
+          child: Column(children: children),
+        ),
+      ],
+    );
+  }
+}
+
+/// Light/dark switch backed by the app's ThemeProvider. The redesign reads its
+/// palette through FpThemeSync, so toggling here repaints every screen.
+class _DarkModeRow extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final theme = context.watch<ThemeProvider>();
+    final isDark = !theme.isLightMode;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: Fp.s16, vertical: 8),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: Fp.violet.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(Fp.rSm),
+                ),
+                child: Icon(
+                  isDark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
+                  size: 19,
+                  color: Fp.violet,
+                ),
+              ),
+              const SizedBox(width: Fp.s16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Dark mode', style: Fp.bodyStrong),
+                    const SizedBox(height: 2),
+                    Text(
+                      isDark ? 'On' : 'Off',
+                      style: Fp.caption.copyWith(color: Fp.textMuted),
+                    ),
+                  ],
+                ),
+              ),
+              Switch(
+                value: isDark,
+                activeThumbColor: Fp.violet,
+                onChanged: (v) => theme.toggleThemeMode(!v),
+              ),
+            ],
+          ),
+        ),
+        Divider(height: 1, thickness: 1, color: Fp.hairline, indent: 72),
+      ],
+    );
+  }
+}

@@ -1,0 +1,427 @@
+import 'dart:async';
+import 'dart:math';
+import 'package:whoxa/utils/preference_key/constant/app_theme_manage.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:whoxa/utils/preference_key/constant/app_colors.dart';
+import 'package:flutter/material.dart';
+
+class WaveformPainter extends CustomPainter {
+  final List<double> data;
+  final double progress;
+  final Color playedColor;
+  final Color unplayedColor;
+  final double barWidth;
+
+  WaveformPainter(
+    this.data,
+    this.progress, {
+    required this.playedColor,
+    required this.unplayedColor,
+    required this.barWidth,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..strokeCap = StrokeCap.round;
+
+    final playedBars = (data.length * progress).floor();
+    double x = 0;
+
+    for (int i = 0; i < data.length; i++) {
+      paint.color = i <= playedBars ? playedColor : unplayedColor;
+
+      final h = data[i] * size.height;
+      canvas.drawLine(
+        Offset(x, size.height / 2 - h / 2),
+        Offset(x, size.height / 2 + h / 2),
+        paint..strokeWidth = barWidth,
+      );
+
+      x += barWidth + 2;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+class WavedAudioPlayerError extends Error {
+  final String message;
+
+  WavedAudioPlayerError(this.message);
+
+  @override
+  String toString() => "WavedAudioPlayerError: $message";
+}
+
+//***********************************************************/
+//***********************************************************/
+//***********************************************************/
+
+class WavedAudioPlayer2 extends StatefulWidget {
+  final String messageId;
+  final String audioUrl;
+  final Duration voiceDuration;
+  final Color playColor;
+
+  const WavedAudioPlayer2({
+    super.key,
+    required this.messageId,
+    required this.audioUrl,
+    required this.voiceDuration,
+    required this.playColor,
+  });
+
+  @override
+  State<WavedAudioPlayer2> createState() => _WavedAudioPlayer2State();
+}
+
+class _WavedAudioPlayer2State extends State<WavedAudioPlayer2> {
+  final audio = GlobalAudioController();
+
+  double progress = 0;
+  Duration remaining = Duration.zero;
+
+  // ✅ NEW backend never returns an attachment duration (messages.service.ts
+  // toPublicMessage has no durationSeconds field), so widget.voiceDuration
+  // is always "00:00"/Duration.zero here. Track the real duration just_audio
+  // reports once it loads the file, and fall back to that everywhere instead
+  // of the (unreliable) server-supplied one.
+  Duration _totalDuration = Duration.zero;
+
+  // ✅ GlobalAudioController.toggle() only flips `playingMessageId` when
+  // switching to a DIFFERENT voice message — pausing/resuming the current
+  // one just calls player.pause()/play() without touching that notifier, so
+  // the play/pause icon (driven by a ValueListenableBuilder on it) never
+  // rebuilt on a simple pause/resume tap. Track real play state directly off
+  // the player's own stream instead.
+  bool _playing = false;
+
+  bool _isDragging = false;
+  bool _wasPlayingBeforeDrag = false;
+
+  StreamSubscription<Duration>? _posSub;
+  StreamSubscription<PlayerState>? _stateSub;
+  StreamSubscription<Duration?>? _durationSub;
+  StreamSubscription<bool>? _playingSub;
+
+  Duration get _effectiveDuration {
+    if (widget.voiceDuration != Duration.zero) return widget.voiceDuration;
+    if (_totalDuration != Duration.zero) return _totalDuration;
+    // GlobalAudioController.toggle() loads the URL (which is when
+    // durationStream reports the length) before marking this message as the
+    // playing one, so _durationSub can miss that event. Read the loaded
+    // duration straight off the player while this message is active.
+    if (audio.playingMessageId.value == widget.messageId) {
+      return audio.player.duration ?? Duration.zero;
+    }
+    return Duration.zero;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    _totalDuration = widget.voiceDuration;
+    remaining = _effectiveDuration;
+    _playing =
+        audio.playingMessageId.value == widget.messageId && audio.player.playing;
+
+    _playingSub = audio.player.playingStream.listen((p) {
+      if (!mounted) return;
+      setState(() {
+        _playing = p;
+      });
+    });
+
+    _posSub = audio.player.positionStream.listen((pos) {
+      if (!mounted) return;
+      if (_isDragging) return;
+      if (audio.playingMessageId.value != widget.messageId) return;
+
+      final total = _effectiveDuration;
+      if (total.inMilliseconds == 0) return;
+
+      final newProgress = pos.inMilliseconds / total.inMilliseconds;
+
+      final left = total - pos;
+
+      setState(() {
+        progress = newProgress.clamp(0.0, 1.0);
+        remaining = left < Duration.zero ? Duration.zero : left;
+      });
+    });
+
+    _durationSub = audio.player.durationStream.listen((d) {
+      if (!mounted) return;
+      if (d == null || d == Duration.zero) return;
+      if (audio.playingMessageId.value != widget.messageId) return;
+
+      setState(() {
+        _totalDuration = d;
+      });
+    });
+
+    /// 🔥 reset when audio completes
+    _stateSub = audio.player.playerStateStream.listen((state) async {
+      if (!mounted) return;
+
+      if (state.processingState == ProcessingState.completed &&
+          audio.playingMessageId.value == widget.messageId) {
+        setState(() {
+          progress = 0.0;
+          remaining = _effectiveDuration;
+        });
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant WavedAudioPlayer2 oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The duration can arrive after the bubble was first built (e.g. the
+    // message refreshed from the server); show it while not mid-playback.
+    if (oldWidget.voiceDuration != widget.voiceDuration &&
+        progress == 0 &&
+        audio.playingMessageId.value != widget.messageId) {
+      remaining = _effectiveDuration;
+    }
+  }
+
+  @override
+  void dispose() {
+    _posSub?.cancel();
+    _stateSub?.cancel();
+    _durationSub?.cancel();
+    _playingSub?.cancel();
+
+    /// 🔥 screen leave → stop audio
+    if (audio.playingMessageId.value == widget.messageId) {
+      audio.stop();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        /// ▶️ PLAY / PAUSE
+        ValueListenableBuilder<String?>(
+          valueListenable: audio.playingMessageId,
+          builder: (_, currentId, _) {
+            final isPlaying = currentId == widget.messageId && _playing;
+
+            return InkWell(
+              onTap: () => audio.toggle(widget.messageId, widget.audioUrl),
+              child: Container(
+                height: 26,
+                width: 26,
+                decoration: BoxDecoration(
+                  color: widget.playColor,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isPlaying ? Icons.pause : Icons.play_arrow,
+                  size: 20,
+                  color: ThemeColorPalette.getTextColor(widget.playColor),
+                ),
+              ),
+            );
+          },
+        ),
+
+        const SizedBox(width: 8),
+        Expanded(
+          child: SizedBox(
+            height: 24,
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+
+                  /// 👆 DRAG START
+                  onHorizontalDragStart: (details) async {
+                    _isDragging = true;
+
+                    _wasPlayingBeforeDrag = audio.player.playing;
+
+                    if (_wasPlayingBeforeDrag) {
+                      await audio.player.pause();
+                    }
+
+                    _updateDragPosition(
+                      details.localPosition.dx,
+                      constraints.maxWidth,
+                    );
+                  },
+
+                  /// 👆 DRAG UPDATE
+                  onHorizontalDragUpdate: (details) {
+                    _updateDragPosition(
+                      details.localPosition.dx,
+                      constraints.maxWidth,
+                    );
+                  },
+
+                  /// 👆 DRAG END
+                  onHorizontalDragEnd: (_) async {
+                    _isDragging = false;
+
+                    final total = _effectiveDuration;
+
+                    final newPosition = Duration(
+                      milliseconds: (total.inMilliseconds * progress).toInt(),
+                    );
+
+                    if (audio.playingMessageId.value != widget.messageId) {
+                      await audio.player.stop();
+                      await audio.player.setUrl(widget.audioUrl);
+                      audio.playingMessageId.value = widget.messageId;
+                    }
+
+                    await audio.player.seek(newPosition);
+
+                    if (_wasPlayingBeforeDrag) {
+                      await audio.player.play();
+                    }
+                  },
+
+                  /// 👆 TAP SUPPORT
+                  onTapDown: (details) async {
+                    _updateDragPosition(
+                      details.localPosition.dx,
+                      constraints.maxWidth,
+                    );
+
+                    final total = _effectiveDuration;
+
+                    final newPosition = Duration(
+                      milliseconds: (total.inMilliseconds * progress).toInt(),
+                    );
+
+                    if (audio.playingMessageId.value != widget.messageId) {
+                      await audio.player.stop();
+                      await audio.player.setUrl(widget.audioUrl);
+                      audio.playingMessageId.value = widget.messageId;
+                    }
+
+                    await audio.player.seek(newPosition);
+
+                    await audio.player.play();
+                  },
+
+                  child: CustomPaint(
+                    painter: WaveformPainter(
+                      WaveformCache.getWave(widget.messageId, 40),
+                      progress,
+                      playedColor: widget.playColor,
+                      unplayedColor: Colors.grey.withValues(alpha: 0.25),
+                      barWidth: 2,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+
+        const SizedBox(width: 8),
+
+        Text(
+          _format(remaining),
+          style: TextStyle(
+            fontSize: 12,
+            color: AppThemeManage.appTheme.textColor,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _updateDragPosition(double dx, double width) {
+    double newProgress = dx / width;
+    newProgress = newProgress.clamp(0.0, 1.0);
+
+    final total = _effectiveDuration;
+
+    final newPosition = Duration(
+      milliseconds: (total.inMilliseconds * newProgress).toInt(),
+    );
+
+    setState(() {
+      progress = newProgress;
+      remaining = total - newPosition;
+    });
+  }
+
+  String _format(Duration d) {
+    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+}
+
+class WaveformCache {
+  static final Map<String, List<double>> _cache = {};
+
+  static List<double> getWave(String key, int count) {
+    if (_cache.containsKey(key)) return _cache[key]!;
+
+    final rnd = Random(key.hashCode);
+    final data = List.generate(count, (_) => rnd.nextDouble().clamp(0.3, 1.0));
+
+    _cache[key] = data;
+    return data;
+  }
+}
+
+class GlobalAudioController {
+  static final GlobalAudioController _instance =
+      GlobalAudioController._internal();
+
+  factory GlobalAudioController() => _instance;
+
+  GlobalAudioController._internal() {
+    player.playerStateStream.listen((state) async {
+      if (state.processingState == ProcessingState.completed) {
+        // 🔥 REAL STOP (MOST IMPORTANT)
+        await player.stop();
+
+        // reset position for next play
+        await player.seek(Duration.zero);
+
+        // 🔥 UI update
+        playingMessageId.value = null;
+      }
+    });
+  }
+
+  final AudioPlayer player = AudioPlayer();
+
+  /// one message active
+  final ValueNotifier<String?> playingMessageId = ValueNotifier(null);
+
+  Future<void> toggle(String messageId, String url) async {
+    // SAME voice
+    if (playingMessageId.value == messageId) {
+      if (player.playing) {
+        await player.pause();
+      } else {
+        await player.play();
+      }
+      return;
+    }
+
+    // DIFFERENT voice
+    await player.stop();
+    await player.setUrl(url);
+    playingMessageId.value = messageId;
+    await player.play();
+  }
+
+  Future<void> stop() async {
+    await player.stop();
+    playingMessageId.value = null;
+  }
+}

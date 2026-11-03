@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "829599707157",
+    "project_id": "flickpitch-app",
+    "storage_bucket": "flickpitch-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:829599707157:android:fcc1b7799bdbe697305e1c",
+        "android_client_info": {
+          "package_name": "com.flickpitch.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkBZFcG4jfTzk5q0-Dc86mgh4QoSJUgls"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:829599707157:android:c397933c91e14566305e1c",
+        "android_client_info": {
+          "package_name": "com.flickpitch.business"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDkBZFcG4jfTzk5q0-Dc86mgh4QoSJUgls"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

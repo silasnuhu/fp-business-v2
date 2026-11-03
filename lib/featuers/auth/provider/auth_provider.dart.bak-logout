@@ -1,0 +1,1342 @@
+// ignore_for_file: avoid_print, prefer_typing_uninitialized_variables, deprecated_member_use
+
+import 'dart:async';
+import 'dart:io';
+
+import 'package:whoxa/featuers/chat/widgets/country_code.dart';
+import 'package:flutter/material.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:get_it/get_it.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
+import 'package:whoxa/core/app_life_cycle.dart';
+import 'package:whoxa/core/error/app_error.dart';
+import 'package:whoxa/core/services/socket/socket_manager.dart';
+import 'package:whoxa/core/services/socket/socket_service.dart';
+import 'package:whoxa/dependency_injection.dart';
+import 'package:whoxa/featuers/auth/data/repositories/login_repository.dart';
+import 'package:whoxa/featuers/auth/data/models/avatar_model.dart';
+import 'package:whoxa/featuers/auth/services/fcm_service.dart';
+import 'package:whoxa/featuers/contacts/provider/contact_provider.dart';
+import 'package:whoxa/featuers/language_method/provider/language_provider.dart';
+import 'package:whoxa/featuers/subscription/provider/subscription_provider.dart';
+import 'package:whoxa/featuers/chat/utils/chat_cache_manager.dart'; // ✅ Import cache manager
+import 'package:whoxa/featuers/chat/provider/chat_provider.dart';
+import 'package:whoxa/featuers/chat/provider/archive_chat_provider.dart';
+import 'package:whoxa/featuers/chat/services/contact_name_service.dart';
+import 'package:whoxa/utils/enums.dart';
+import 'package:whoxa/utils/logger.dart';
+import 'package:whoxa/utils/packages/phone_field/countries.dart';
+import 'package:whoxa/utils/preference_key/constant/strings.dart';
+import 'package:whoxa/utils/preference_key/preference_key.dart';
+import 'package:whoxa/utils/preference_key/sharedpref_key.dart';
+import 'package:whoxa/widgets/global.dart';
+import 'package:whoxa/widgets/common_profile_avatar.dart'
+    show kNotFoundProfileImageUrl;
+import 'package:whoxa/core/services/device_country_code_service.dart';
+
+class AuthProvider extends ChangeNotifier {
+  final ConsoleAppLogger _logger = ConsoleAppLogger();
+  TextEditingController mobilecontroller = TextEditingController();
+  TextEditingController emailcontroller = TextEditingController();
+  TextEditingController otpController = TextEditingController();
+  TextEditingController userNameController = TextEditingController();
+  TextEditingController fNameController = TextEditingController();
+  TextEditingController lNameController = TextEditingController();
+  TextEditingController countryController = TextEditingController();
+
+  String isSelected = '';
+  String isSelectLoginType = loginType.isNotEmpty ? loginType : AppString.phone;
+
+  bool isOtpValidationTriggered = false;
+
+  // Use device-detected country code as default instead of hardcoded '+91'
+  String defaultSelectedCountry = 'Nigeria';
+  late String selectedCountrycode;
+  late String defaultCountrySortName;
+
+  Country? selectedCountry;
+
+  bool isInvalidNumber = false;
+
+  void setLoginType(String type) {
+    isSelectLoginType = type;
+    noty();
+  }
+
+  void setGenderType(String type) {
+    isSelected = type;
+    noty();
+  }
+
+  void validateInput() {
+    if (phone == null || phone!.isEmpty || mobilecontroller.text.isEmpty) {
+      isInvalidNumber = true;
+      noty();
+    } else {
+      isInvalidNumber = false;
+      noty();
+    }
+  }
+
+  bool isValidEmail(String email) {
+    final emailRegExp = RegExp(
+      r"^[a-zA-Z0-9.a-zA-Z0-9.!#$%&'*+-/=?^_`{|}~]+@[a-zA-Z0-9]+\.[a-zA-Z]+",
+    );
+    return emailRegExp.hasMatch(email);
+  }
+
+  void noty() {
+    notifyListeners();
+  }
+
+  Future<void> initializeData() async {
+    _logger.i('<<<initializeData call>>>');
+
+    // ✅ CRITICAL FIX: Check if user is logged in before auto-selecting avatar
+    String? userToken = await SecurePrefs.getString(SecureStorageKeys.TOKEN);
+    String? userIdValue = await SecurePrefs.getString(SecureStorageKeys.USERID);
+    bool isUserLoggedIn =
+        (userToken != null && userToken.isNotEmpty) ||
+        (userIdValue != null && userIdValue.isNotEmpty);
+
+    _logger.i(
+      '🔍 InitializeData - userToken exists: ${userToken?.isNotEmpty ?? false}',
+    );
+    _logger.i(
+      '🔍 InitializeData - userID exists: ${userIdValue?.isNotEmpty ?? false}',
+    );
+    _logger.i('🔍 InitializeData - isUserLoggedIn: $isUserLoggedIn');
+
+    // Only auto-select avatar if user is logged in
+    loadAvatars(isSelected: isUserLoggedIn);
+
+    String? login = await SecurePrefs.getString(SecureStorageKeys.TYPE);
+    String? emailID = await SecurePrefs.getString(SecureStorageKeys.EMAIL);
+    String? countryCD = await SecurePrefs.getString(
+      SecureStorageKeys.COUNTRY_CODE,
+    );
+    String? mobile = await SecurePrefs.getString(SecureStorageKeys.MOBILE_NUM);
+    debugPrint("loginType:$loginType");
+    debugPrint("emailID:${emailID.toString()}");
+    debugPrint("mobile:${mobile.toString()}");
+    selectedCountrycode = countryCD.toString();
+    emailcontroller.text = emailID.toString();
+    mobilecontroller.text = mobile.toString();
+    isSelectLoginType = login.toString();
+  }
+
+  //==============================================================  Repositories Define =============================================================
+  final LoginRepository loginRepository;
+
+  AuthProvider(this.loginRepository) {
+    // Initialize country code from device detection service
+    selectedCountrycode = DeviceCountryCodeService.instance
+        .getDefaultDialCodeWithPlus();
+    defaultCountrySortName = DeviceCountryCodeService.instance
+        .getDefaultIsoCode();
+    debugPrint(
+      'AuthProvider initialized with country: $selectedCountrycode ($defaultCountrySortName)',
+    );
+  }
+  //==================================================================================================================================================
+  //=============================================================== LOGIN EMAIL/MOBILE APIS ==========================================================
+  //==================================================================================================================================================
+
+  bool _isLoading = false;
+  String? _errorMessage;
+
+  bool get isLoading => _isLoading;
+  String? get errorMessage => _errorMessage; // Getter for error message
+
+  Future<bool> loginApi(BuildContext context, String email) async {
+    _isLoading = true;
+    _errorMessage = null;
+    noty();
+
+    try {
+      final result = await loginRepository.emailLoginRepository(email);
+
+      if (result.status == true) {
+        _isLoading = false;
+        _errorMessage = result.message;
+        noty();
+        return true;
+      } else {
+        _isLoading = false;
+        _errorMessage = result.message;
+        noty();
+        return false;
+      }
+    } on AppError catch (e) {
+      _isLoading = false;
+      _errorMessage = e.message;
+      noty();
+      return false;
+    } catch (e) {
+      _isLoading = false;
+      _errorMessage = 'Unexpected error occurred';
+      noty();
+      return false;
+    }
+  }
+
+  Future<bool> loginMobileApi(
+    BuildContext context, {
+    required String countryCode,
+    required String phoneNumber,
+    required String countryFullName,
+    required String selectedCountrySortName,
+  }) async {
+    _isLoading = true;
+    _errorMessage = null;
+    noty();
+    try {
+      final result = await loginRepository.mobileLoginRepository(
+        countryCode,
+        phoneNumber,
+        countryFullName,
+        selectedCountrySortName,
+      );
+
+      if (result.status == true) {
+        _isLoading = false;
+        _errorMessage = result.message;
+        noty();
+        return true;
+      } else {
+        _isLoading = false;
+        _errorMessage = result.message;
+        noty();
+        return false;
+      }
+    } on AppError catch (e) {
+      _isLoading = false;
+      _errorMessage = e.message;
+      noty();
+      return false;
+    } catch (e) {
+      _isLoading = false;
+      _errorMessage = 'Unexpected error occurred';
+      _logger.i('Error loading features: $e');
+      noty();
+      return false;
+    }
+  }
+
+  //==================================================================================================================================================
+  //=============================================================== OTP EMAIL/MOBILE APIS ============================================================
+  //==================================================================================================================================================
+
+  bool _isLoadingOtp = false;
+
+  bool get isLoadingOtp => _isLoadingOtp;
+
+  /// Set loading state for OTP verification flow
+  /// Used to show loader during profile check and navigation after demo dialog
+  void setLoadingOtp(bool value) {
+    _isLoadingOtp = value;
+    noty();
+  }
+
+  Future<bool> otpVerifyApi(
+    BuildContext context, {
+    required String countryCode,
+    required String phoneNumber,
+    required bool isEmail,
+    required String email,
+    required String otp,
+  }) async {
+    debugPrint("isSelectLoginType:$isSelectLoginType");
+    try {
+      _isLoadingOtp = true;
+      _errorMessage = null;
+      noty();
+
+      // ✅ Get FCM registration token with a hard 3s timeout — never block OTP
+      String? fcmToken;
+      try {
+        fcmToken = await FcmService().getTokenAsync().timeout(
+          const Duration(seconds: 3),
+        );
+      } on TimeoutException {
+        _logger.w('FCM getTokenAsync timed out after 3s');
+        fcmToken = null;
+      } catch (e) {
+        _logger.w('FCM getTokenAsync error: $e');
+        fcmToken = null;
+      }
+
+      if (fcmToken == null || fcmToken.isEmpty) {
+        fcmToken = "not_available";
+        _logger.w('FCM token not available, using fallback');
+      } else {
+        _logger.i('FCM token: $fcmToken');
+      }
+
+      final result = await loginRepository.otpRepository(
+        isEmail: isEmail,
+        countryCode: countryCode,
+        phoneNumber: phoneNumber,
+        email: email,
+        otp: otp,
+        fcmToken: fcmToken,
+        country: defaultSelectedCountry,
+      );
+      if (result.status == true) {
+        // Store token, save user info, etc.
+
+        // ✅ Defensive account-switch cleanup. A clean in-app logout already
+        // wipes the ContactNameService name caches, but this covers the
+        // paths that don't: a logout where the ContactListProvider lookup
+        // threw (it's swallowed as "non-critical"), and iOS keychain data
+        // that survived an app reinstall. Without this, logging in with a
+        // real account on top of a leftover demo session shows the demo
+        // account's contact names (both share one backend, so cached
+        // userId→name entries collide onto real people).
+        final previousUserId = await SecurePrefs.getString(
+          SecureStorageKeys.USERID,
+        );
+        final newUserId = result.data!.user!.userId.toString();
+        if (previousUserId == null ||
+            previousUserId.isEmpty ||
+            previousUserId != newUserId) {
+          try {
+            ContactNameService.instance.clearCache();
+            _logger.i(
+              'Cleared ContactNameService cache on login '
+              '(prev=$previousUserId, new=$newUserId)',
+            );
+          } catch (e) {
+            _logger.w('Could not clear ContactNameService cache on login: $e');
+          }
+        }
+
+        if (result.data!.user!.userName != null) {
+          userNameController.text = result.data!.user!.userName!.toString();
+        }
+        fNameController.text = result.data!.user!.firstName.toString();
+        lNameController.text = result.data!.user!.lastName.toString();
+        countryController.text = result.data!.user!.country.toString();
+        isSelected = result.data!.user!.gender.toString();
+
+        // Keep the in-memory mirror in sync immediately — ApiClient reads
+        // `authToken` directly on every request instead of re-hitting
+        // secure storage, so this has to happen at the same time as the
+        // storage write below, not just on the next cold start.
+        authToken = result.data!.token.toString();
+
+        await SecurePrefs.setMultiple({
+          SecureStorageKeys.TOKEN: result.data!.token.toString(),
+          SecureStorageKeys.USERID: result.data!.user!.userId.toString(),
+
+          SecureStorageKeys.USER_NAME: (result.data!.user!.userName != null)
+              ? result.data!.user!.userName.toString()
+              : "",
+          SecureStorageKeys.FIRST_NAME: result.data!.user!.firstName.toString(),
+          SecureStorageKeys.LAST_NAME: result.data!.user!.lastName.toString(),
+          SecureStorageKeys.COUNTRY_NAME: result.data!.user!.country.toString(),
+          SecureStorageKeys.GENDER: result.data!.user!.gender.toString(),
+          SecureStorageKeys.EMAIL: email,
+          SecureStorageKeys.COUNTRY_CODE: result.data!.user!.countryCode,
+          SecureStorageKeys.MOBILE_NUM: result.data!.user!.mobileNum.toString(),
+          SecureStorageKeys.TYPE: isSelectLoginType.toString(),
+          SecureStorageKeys.USER_PROFILE: result.data!.user!.profilePic
+              .toString(),
+        });
+
+        // ✅ ANDROID FIX: Set permission flag to true after successful OTP verification
+        // This prevents the app from redirecting to onboarding screen on app restart
+        await SecurePrefs.setBool(SecureStorageKeys.PERMISSION, true);
+
+        // ✅ NEW: Store demo account flag. The NEW backend has no
+        // server-side "demo account" concept, so on top of whatever the
+        // API returns we also treat a login as demo when the number
+        // entered matches the demo credentials shown on the login screen
+        // (see AppConfig.isDemoLogin) — that's how demo-account
+        // restrictions (no delete chat/messages, no upload, etc.) get
+        // applied without backend support.
+        // Demo mode is disabled for production: no account is ever
+        // treated as a demo account, so none of the demo-account
+        // restrictions (no delete chat/messages, no avatar upload, etc.)
+        // can activate.
+        final bool isDemoAccount = false;
+        await SecurePrefs.setBool(SecureStorageKeys.IS_DEMO, isDemoAccount);
+        debugPrint("TYPE:$isSelectLoginType");
+        await SecureStorageKeys().loadUserFromPrefs();
+        // ✅ CRITICAL FIX: Load boolean values including isDemo, isPhoneAuthEnabled, isEmailAuthEnabled
+        await SecureStorageKeys().loadeBoolValuePrefes();
+
+        debugPrint("authToken:$authToken");
+        debugPrint("isDemo:$isDemo"); // Debug log to verify isDemo is loaded
+
+        // IMPORTANT: Initialize socket connections after successful login
+        // ✅ Check if context is still mounted before using it across async gap
+        if (context.mounted) {
+          await handleSuccessfulLogin(context);
+        }
+
+        _isLoadingOtp = false;
+        noty();
+        return true;
+      } else {
+        _isLoadingOtp = false;
+        _errorMessage = result.message ?? AppString.failedToAddOTP;
+        noty();
+        return false;
+      }
+    } on AppError catch (e) {
+      _isLoadingOtp = false;
+      _errorMessage = e.message;
+      _logger.i('Error loading features: ${e.message}');
+      noty();
+      return false;
+    } catch (e) {
+      _isLoadingOtp = false;
+      _errorMessage = 'Unexpected error occurred';
+      _logger.i('Error loading features_catch: $e');
+      noty();
+      return false;
+    }
+  }
+
+  //==================================================================================================================================================
+  //=============================================================== USER NAME CHECK ==================================================================
+  //==================================================================================================================================================
+  bool isCheckuserName = false;
+  bool _isLoadingName = false;
+  String userNameError = '';
+
+  UserNameStatus _userNameStatus = UserNameStatus.initial;
+  Timer? _debounce;
+
+  bool get isLoadingName => _isLoadingName;
+  UserNameStatus get userNameStatus => _userNameStatus;
+  String get currentUserName => userNameController.text.trim();
+
+  /* ================= RESET ================= */
+
+  void resetUserNameState() {
+    _debounce?.cancel();
+    _userNameStatus = UserNameStatus.initial;
+    _isLoadingName = false;
+    userNameError = '';
+    _errorMessage = null;
+    isCheckuserName = false;
+
+    // userNameController.clear(); // Add this
+    notifyListeners();
+  }
+
+  /* ================= USERNAME CHANGE ================= */
+
+  void onUserNameChanged(String value) {
+    final trimmed = value.trim();
+
+    _debounce?.cancel();
+
+    if (trimmed.isEmpty) {
+      userNameError = '';
+      setUserNameStatus(UserNameStatus.initial);
+      notifyListeners();
+      return;
+    }
+
+    // show loader immediately
+    userNameError = '';
+    setUserNameStatus(UserNameStatus.loading);
+    notifyListeners();
+
+    _debounce = Timer(const Duration(milliseconds: 800), () {
+      userNameCheckApi(trimmed);
+    });
+  }
+
+  /* ================= API CALL ================= */
+
+  Future<void> userNameCheckApi(String xyz) async {
+    if (xyz.isEmpty) return;
+
+    try {
+      _isLoadingName = true;
+      _errorMessage = null;
+      userNameError = '';
+      noty();
+
+      final result = await loginRepository.userNameCheckRepo(xyz);
+
+      _isLoadingName = false;
+      noty();
+
+      if (result.status == true) {
+        setUserNameStatus(UserNameStatus.success);
+        userNameError = '';
+      } else {
+        setUserNameStatus(UserNameStatus.error);
+        _errorMessage = result.message;
+        userNameError = result.message!;
+      }
+    } on AppError catch (e) {
+      _isLoadingName = false;
+      _errorMessage = e.message;
+      setUserNameStatus(UserNameStatus.error);
+      noty();
+    } catch (e) {
+      _isLoadingName = false;
+      setUserNameStatus(UserNameStatus.error);
+      _errorMessage = 'Unexpected error occurred';
+      _logger.i('Error loading features: $e');
+      userNameError = "Please enter your user name";
+      noty();
+    }
+  }
+
+  void setUserNameStatus(UserNameStatus status) {
+    _userNameStatus = status;
+    noty();
+  }
+
+  void clearUserName() {
+    userNameController.clear();
+    userNameError = '';
+    setUserNameStatus(UserNameStatus.initial);
+    _debounce?.cancel();
+    noty();
+  }
+
+  void setUserNameSafely() {
+    final safeName = userNameController.text.trim();
+    if (safeName.isEmpty || safeName == "null") {
+      userNameController.clear();
+    } else {
+      userNameController.text = safeName;
+    }
+  }
+
+  //==================================================================================================================================================
+  //=============================================================== USER Profile add =================================================================
+  //==================================================================================================================================================
+  bool _isUserProfile = false;
+
+  bool get isUserProfile => _isUserProfile;
+
+  Future<bool> userProfileApi(BuildContext context) async {
+    debugPrint("_selectedAvatar:$_selectedAvatar");
+    debugPrint("_pictureType:$_pictureType");
+    _logger.i(
+      '🔍 UserProfileApi - selectedAvatar: ${_selectedAvatar?.avatarMedia}',
+    );
+    _logger.i('🔍 UserProfileApi - pictureType: $_pictureType');
+    _logger.i('🔍 UserProfileApi - image file: $image');
+    try {
+      _isUserProfile = true;
+      _errorMessage = null;
+      noty();
+
+      final result = await loginRepository.userProfileAddRepo(
+        image,
+        userName: userNameController.text,
+        fname: fNameController.text,
+        lname: lNameController.text,
+        country: defaultSelectedCountry,
+        gender: isSelected,
+        deviceToken: "",
+        // email: emailcontroller.text,
+        countryCode: selectedCountrycode,
+        mobile: mobilecontroller.text,
+        avatarUrl: _selectedAvatar?.avatarMedia,
+        pictureType: _pictureType,
+      );
+
+      if (result.status == true) {
+        await SecurePrefs.setMultiple({
+          SecureStorageKeys.USER_NAME: (result.data?.userName ?? '').toString(),
+          SecureStorageKeys.FIRST_NAME: (result.data?.firstName ?? '')
+              .toString(),
+          SecureStorageKeys.LAST_NAME: (result.data?.lastName ?? '').toString(),
+          SecureStorageKeys.COUNTRY_NAME: (result.data?.country ?? '')
+              .toString(),
+          SecureStorageKeys.GENDER: (result.data?.gender ?? '').toString(),
+          SecureStorageKeys.EMAIL: email,
+          SecureStorageKeys.COUNTRY_CODE: result.data!.countryCode,
+          SecureStorageKeys.MOBILE_NUM: (result.data?.mobileNum ?? '')
+              .toString(),
+          SecureStorageKeys.USER_PROFILE: (result.data?.profilePic ?? '')
+              .toString(),
+        });
+        await SecureStorageKeys().loadUserFromPrefs();
+        if (result.data?.profilePic != null && result.data?.profilePic != "") {
+          userProfile = result.data!.profilePic.toString();
+        }
+        // premium_user from /users/updateUser keeps the blue tick / ad-free
+        // state in sync.
+        if (context.mounted) {
+          context.read<SubscriptionProvider>().applyProfilePremium(
+            premiumUser: result.data?.premiumUser,
+            premiumExpiresAt: result.data?.premiumExpiresAt,
+          );
+        }
+        _isUserProfile = false;
+        _errorMessage = result.message;
+        noty();
+        return true;
+      } else {
+        _isUserProfile = false;
+        _errorMessage = result.message ?? "Something went wrong";
+        noty();
+        return false;
+      }
+    } on AppError catch (e) {
+      _isUserProfile = false;
+      _errorMessage = e.message;
+      noty();
+      return false;
+    } catch (e) {
+      _isUserProfile = false;
+      _errorMessage = 'Unexpected error occurred';
+      _logger.i('Error loading features: $e');
+      noty();
+      return false;
+    }
+  }
+
+  //==================================================================================================================================================
+  //=============================================================== AVATAR UPDATE ONLY ==============================================================
+  //==================================================================================================================================================
+  Future<bool> updateAvatarApi(BuildContext context) async {
+    debugPrint("_selectedAvatar:$_selectedAvatar");
+    debugPrint("_pictureType:$_pictureType");
+    // ✅ DEMO MODE: Block profile picture upload for demo accounts
+    if (isDemo) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Demo accounts cannot upload a profile picture'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return false;
+    }
+    try {
+      _isUserProfile = true;
+      _errorMessage = null;
+      noty();
+
+      final result = await loginRepository.updateAvatarRepo(
+        image: image,
+        avatarUrl: _selectedAvatar?.avatarMedia,
+        pictureType: _pictureType,
+      );
+
+      if (result.status == true) {
+        await SecurePrefs.setString(
+          SecureStorageKeys.USER_PROFILE,
+          result.data!.profilePic.toString(),
+        );
+        await SecureStorageKeys().loadUserFromPrefs();
+        _isUserProfile = false;
+        _errorMessage = result.message;
+        noty();
+        return true;
+      } else {
+        _isUserProfile = false;
+        _errorMessage = result.message ?? "Something went wrong";
+        noty();
+        return false;
+      }
+    } on AppError catch (e) {
+      _isUserProfile = false;
+      _errorMessage = e.message;
+      noty();
+      return false;
+    } catch (e) {
+      _isUserProfile = false;
+      _errorMessage = 'Unexpected error occurred';
+      _logger.i('Error updating avatar: $e');
+      noty();
+      return false;
+    }
+  }
+
+  //==================================================================================================================================================
+  //=============================================================== USER Profile GET =================================================================
+  //==================================================================================================================================================
+  File? image;
+  final picker = ImagePicker();
+  bool _isGetProfile = false;
+
+  bool get isGetProfile => _isGetProfile;
+  String? profileImageUrl;
+  bool hasLoadedOnce = false;
+  bool isInternetIssue = false;
+
+  // Avatar related variables
+  List<Records> _avatars = [];
+  List<Records> get avatars => _avatars;
+  bool _isLoadingAvatars = false;
+  bool get isLoadingAvatars => _isLoadingAvatars;
+  Records? _selectedAvatar;
+  Records? get selectedAvatar => _selectedAvatar;
+  Records? _tempSelectedAvatar;
+  Records? get tempSelectedAvatar => _tempSelectedAvatar;
+  String _pictureType = 'profile_pic';
+  String get pictureType => _pictureType;
+
+  /// Whether there is anything to remove right now — a freshly picked file, a
+  /// catalog avatar, or a real profile picture on the server (the backend's
+  /// "not-found" placeholder doesn't count).
+  bool get hasProfilePicture =>
+      image != null ||
+      _selectedAvatar != null ||
+      (profileImageUrl != null &&
+          profileImageUrl!.isNotEmpty &&
+          profileImageUrl != kNotFoundProfileImageUrl);
+
+  /// Calls `DELETE /users/avatar` immediately (tapping "Remove" in the
+  /// Profile Photo sheet), and on success clears the picture locally —
+  /// provider state, secure prefs, and the global `userProfile` var used by
+  /// screens like Settings — so every screen showing the logged-in user's
+  /// own avatar updates without waiting for a profile-form Submit.
+  Future<bool> removeAvatarApi(BuildContext context) async {
+    if (isDemo) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Demo accounts cannot remove a profile picture'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return false;
+    }
+    try {
+      _isUserProfile = true;
+      _errorMessage = null;
+      noty();
+
+      final result = await loginRepository.deleteAvatarRepo();
+
+      if (result.status == false) {
+        _isUserProfile = false;
+        _errorMessage = result.message ?? "Failed to remove profile photo";
+        noty();
+        return false;
+      }
+
+      image = null;
+      _selectedAvatar = null;
+      _tempSelectedAvatar = null;
+      _pictureType = 'profile_pic';
+      profileImageUrl = null;
+      await SecurePrefs.setString(SecureStorageKeys.USER_PROFILE, "");
+      await SecureStorageKeys().loadUserFromPrefs();
+
+      _isUserProfile = false;
+      _errorMessage = null;
+      noty();
+      return true;
+    } on AppError catch (e) {
+      _isUserProfile = false;
+      _errorMessage = e.message;
+      noty();
+      return false;
+    } catch (e) {
+      _isUserProfile = false;
+      _errorMessage = 'Unexpected error occurred';
+      _logger.i('Error removing avatar: $e');
+      noty();
+      return false;
+    }
+  }
+
+  Future<void> userProfileApiGet({BuildContext? context}) async {
+    if (!hasLoadedOnce) {
+      _isGetProfile = true;
+    }
+    _errorMessage = null;
+    isInternetIssue = false;
+    hasLoadedOnce = false;
+    noty();
+    try {
+      final result = await loginRepository.userProfileGetRepo();
+
+      if (result.status == true) {
+        userNameController.text = (result.data?.userName ?? '').toString();
+        if (result.data?.userName?.isNotEmpty == true) {
+          _userNameStatus = UserNameStatus.success;
+        }
+        fNameController.text = (result.data?.firstName ?? '').toString();
+        lNameController.text = (result.data?.lastName ?? '').toString();
+        emailcontroller.text = (result.data?.email ?? '').toString();
+        selectedCountrycode = (result.data?.countryCode ?? '').toString();
+        mobilecontroller.text = (result.data?.mobileNum ?? '').toString();
+        countryController.text = (result.data?.country ?? '').toString();
+        profileImageUrl = result.data?.profilePic;
+        debugPrint("profileImageUrl:$profileImageUrl");
+        isSelected = (result.data?.gender ?? '').toString();
+        await SecurePrefs.setMultiple({
+          SecureStorageKeys.USER_NAME: (result.data?.userName ?? '').toString(),
+          SecureStorageKeys.FIRST_NAME: (result.data?.firstName ?? '')
+              .toString(),
+          SecureStorageKeys.LAST_NAME: (result.data?.lastName ?? '').toString(),
+          SecureStorageKeys.COUNTRY_NAME: (result.data?.country ?? '')
+              .toString(),
+          SecureStorageKeys.GENDER: (result.data?.gender ?? '').toString(),
+          SecureStorageKeys.EMAIL: (result.data?.email ?? '').toString(),
+          SecureStorageKeys.COUNTRY_CODE: (result.data?.countryCode ?? '')
+              .toString(),
+          SecureStorageKeys.MOBILE_NUM: (result.data?.mobileNum ?? '')
+              .toString(),
+          SecureStorageKeys.USER_PROFILE: (result.data?.profilePic ?? '')
+              .toString(),
+        });
+        await SecureStorageKeys().loadUserFromPrefs();
+
+        hasLoadedOnce = true;
+        _isGetProfile = false;
+        _selectedAvatar = null;
+        if (context != null && context.mounted) {
+          context.read<SubscriptionProvider>().applyProfilePremium(
+            premiumUser: result.data?.premiumUser,
+            premiumExpiresAt: result.data?.premiumExpiresAt,
+          );
+        }
+        noty();
+      } else {
+        _isGetProfile = false;
+        noty();
+        _errorMessage = result.message ?? "Something went wrong";
+      }
+    } on AppError catch (e) {
+      //===== APP ERROR SHOW =====
+      _isGetProfile = false;
+      final data = extractErrorData(e);
+      _errorMessage = data?['message'] ?? 'Unknown error';
+      isInternetIssue = e.isNetworkError;
+      noty();
+      //==========================
+    } catch (e) {
+      //====== CATCH ERROR =======
+      _errorMessage = 'Unexpected error occurred';
+      isInternetIssue = false;
+      _logger.i('Error loading features: $e');
+      noty();
+      //==========================
+    } finally {
+      _isGetProfile = false;
+      noty();
+    }
+  }
+
+  Future getImageFromCamera() async {
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.camera,
+      imageQuality: 80,
+    );
+    if (pickedFile != null) {
+      image = File(pickedFile.path);
+      _selectedAvatar = null;
+      _pictureType = 'profile_pic';
+      noty();
+    } else {
+      debugPrint('No image selected.');
+    }
+  }
+
+  Future getImageFromGallery() async {
+    final pickedFile = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+    );
+    if (pickedFile != null) {
+      image = File(pickedFile.path);
+      _selectedAvatar = null;
+      _pictureType = 'profile_pic';
+      noty();
+    } else {
+      debugPrint('No image selected.');
+    }
+  }
+
+  // Avatar related methods
+
+  Future<void> loadAvatars({required bool isSelected}) async {
+    _logger.i('loadAvatars call>>>');
+    _isLoadingAvatars = true;
+    noty();
+
+    try {
+      final result = await loginRepository.getAllAvatarsRepo();
+      if (result.status == true && result.data != null) {
+        _avatars = result.data!.records!;
+        if (isSelected) {
+          selectAvatar(_avatars[0]);
+        }
+      } else {
+        _avatars = [];
+      }
+    } catch (e) {
+      _logger.e('Error loading avatars: $e');
+      _avatars = [];
+    } finally {
+      _isLoadingAvatars = false;
+      noty();
+    }
+  }
+
+  void selectAvatar(Records avatar) {
+    _selectedAvatar = avatar;
+    image = null;
+    _pictureType = 'avatar';
+    noty();
+  }
+
+  void selectAvatarTemp(Records avatar) {
+    _tempSelectedAvatar = avatar;
+    noty();
+  }
+
+  void clearImageSelection() {
+    image = null;
+    _selectedAvatar = null;
+    _pictureType = 'profile_pic';
+    noty();
+  }
+
+  //==================================================================================================================================================
+  //=============================================================== USER DELETE ACC ==================================================================
+  //==================================================================================================================================================
+  bool _isDeleteAcc = false;
+  bool get isDeleteAcc => _isDeleteAcc;
+
+  bool _isLogout = false;
+  bool get isLogout => _isLogout;
+
+  Future<bool> userDeleteAccApi() async {
+    try {
+      _isDeleteAcc = true;
+      _errorMessage = null;
+      noty();
+
+      final result = await loginRepository.deleteUserRepo();
+
+      if (result.status == true) {
+        _isDeleteAcc = false;
+        _errorMessage = result.message;
+        noty();
+        return true;
+      } else {
+        _isDeleteAcc = false;
+        _errorMessage = result.message;
+        noty();
+        return false;
+      }
+    } on AppError catch (e) {
+      _isDeleteAcc = false;
+      _errorMessage = e.message;
+      noty();
+      return false;
+    } catch (e) {
+      _isDeleteAcc = false;
+      noty();
+      return false;
+    }
+  }
+
+  Future<bool> userLogoutApi({String? socketId}) async {
+    try {
+      _logger.i('Calling logout API with socket_id: $socketId');
+      final result = await loginRepository.logoutUserRepo(socketId: socketId);
+
+      if (result.status == true) {
+        _logger.i('Logout API successful: ${result.message}');
+        return true;
+      } else {
+        _logger.w('Logout API failed: ${result.message}');
+        _errorMessage = result.message;
+        return false;
+      }
+    } on AppError catch (e) {
+      _logger.e('Logout API error: ${e.message}');
+      _errorMessage = e.message;
+      return false;
+    } catch (e) {
+      _logger.e('Logout API unexpected error: $e');
+      return false;
+    }
+  }
+
+  /// Handle successful login with socket initialization
+  /// ✅ OPTIMIZED: Socket initialization now runs in background (non-blocking)
+  Future<void> handleSuccessfulLogin(BuildContext context) async {
+    try {
+      _logger.i(
+        'Handling successful login - starting background socket initialization',
+      );
+
+      // ✅ PERFORMANCE FIX: Initialize socket connections in BACKGROUND (non-blocking)
+      // This prevents the 2-3 second delay before navigation
+      Future.microtask(() async {
+        try {
+          await initializeSocketAfterLogin();
+          _logger.i(
+            '✅ Socket connections initialized successfully (background)',
+          );
+        } catch (e) {
+          _logger.e('❌ Error initializing socket connections (background): $e');
+          // Socket will retry later - user can still use the app
+        }
+      });
+
+      // Notify app lifecycle manager if available (non-blocking)
+      if (context.mounted) {
+        context.lifecycleManager?.onUserLoggedIn();
+      }
+
+      _logger.i(
+        'Login handler completed - socket initialization running in background',
+      );
+    } catch (e) {
+      _logger.e('Error in handleSuccessfulLogin', e);
+      // Don't fail the login process if socket initialization fails
+      // The user can still use the app, socket will retry later
+    }
+  }
+
+  /// Handle logout with proper socket cleanup
+  Future<void> handleLogout(BuildContext context) async {
+    try {
+      _isLogout = true;
+      notifyListeners();
+      _logger.i('Handling logout - calling API and cleaning up');
+
+      // Get current socket ID before logout
+      String? currentSocketId;
+      try {
+        final socketService = GetIt.instance<SocketService>();
+        currentSocketId = socketService.socketId;
+        _logger.i('Current socket ID for logout: $currentSocketId');
+      } catch (e) {
+        _logger.w('Could not get socket ID for logout: $e');
+      }
+
+      // ✅ FIXED: Clean up socket connections BEFORE clearing secure storage
+      // This prevents the socket from trying to reconnect with cleared tokens
+      _logger.i('Cleaning up socket connections before token cleanup');
+      await cleanupSocketAfterLogout();
+
+      // ✅ CRITICAL FIX: Clear chat cache to prevent old user's messages showing to new user
+      _logger.i('Clearing chat cache to remove old user data');
+      try {
+        await ChatCacheManager.clearAll();
+        _logger.i('✅ Chat cache cleared successfully');
+      } catch (e) {
+        _logger.w('⚠️ Error clearing chat cache: $e');
+        // Continue with logout even if cache clear fails
+      }
+
+      // Call logout API with current socket ID
+      await userLogoutApi(socketId: currentSocketId);
+
+      // Note: unlike OneSignal, FCM's token isn't tied to a per-user login
+      // association — nothing to disassociate here on logout.
+
+      // Notify app lifecycle manager about logout
+      if (context.mounted) {
+        context.lifecycleManager?.onUserLoggedOut();
+      }
+      if (context.mounted) {
+        final languageProvider = Provider.of<LanguageProvider>(
+          context,
+          listen: false,
+        );
+        // NEW has no language backend (langListRepo always returns an
+        // empty list now) — languageListData will never contain an
+        // "English" entry, so skip this rather than let firstWhere() throw
+        // and abort the rest of logout (stored-data clearing below).
+        final english = languageProvider.languageListData.where(
+          (element) => element.language == "English",
+        );
+        if (english.isNotEmpty) {
+          await languageProvider.wordListApi(
+            languageId: english.first.languageId.toString(),
+          );
+        }
+      }
+
+      // Clear all stored data AFTER socket cleanup
+      await SecurePrefs.clear();
+      isLightModeGlobal = await SecurePrefs.getBoolLighDark(
+        SecureStorageKeys.isLightMode,
+      );
+      await getCountryISOFromLocation();
+      debugPrint("isLightModeGlobal:$isLightModeGlobal");
+
+      _logger.i('Secure storage cleared after socket cleanup');
+
+      if (context.mounted) {
+        final languageProvider = Provider.of<LanguageProvider>(
+          context,
+          listen: false,
+        );
+        languageProvider.loginDeleteTineUse();
+      }
+
+      // Reset contact provider state for new user
+      try {
+        // Try to get contact provider from context if available
+        if (context.mounted) {
+          try {
+            final contactProvider = Provider.of<ContactListProvider>(
+              context,
+              listen: false,
+            );
+            contactProvider.resetContactProvider();
+            _logger.i('ContactListProvider reset completed via Provider.of');
+          } catch (e) {
+            _logger.w(
+              'Could not reset ContactListProvider via Provider.of: $e',
+            );
+
+            // Fallback: Try GetIt
+            try {
+              final contactProvider = GetIt.instance.get<ContactListProvider>();
+              contactProvider.resetContactProvider();
+              _logger.i('ContactListProvider reset completed via GetIt');
+            } catch (e2) {
+              _logger.w('Could not reset ContactListProvider via GetIt: $e2');
+            }
+          }
+        } else {
+          _logger.w('Context not mounted, cannot reset ContactListProvider');
+        }
+      } catch (e) {
+        _logger.w('General error resetting ContactListProvider: $e');
+        // Non-critical error, continue with logout
+      }
+
+      // ✅ CRITICAL FIX: Wipe ChatProvider's in-memory state so the next
+      // account to log in on this session never sees the previous user's
+      // chat list / messages / block list. ChatProvider is a long-lived
+      // provider that is NOT disposed on logout, and an empty chat-list
+      // response for a chat-less new account is intentionally ignored to
+      // "preserve existing chats" — so without this the old data lingers.
+      // Must go through Provider.of (the widget-tree instance); GetIt returns
+      // a throwaway factory instance for ChatProvider.
+      try {
+        if (context.mounted) {
+          await Provider.of<ChatProvider>(
+            context,
+            listen: false,
+          ).resetForLogout();
+          _logger.i('ChatProvider reset completed');
+        } else {
+          _logger.w('Context not mounted, cannot reset ChatProvider');
+        }
+      } catch (e) {
+        _logger.w('Could not reset ChatProvider on logout: $e');
+      }
+
+      // Also clear the archived-chat list (singleton, survives logout too).
+      try {
+        if (context.mounted) {
+          Provider.of<ArchiveChatProvider>(
+            context,
+            listen: false,
+          ).clearArchivedChats(resetCount: true);
+        } else {
+          GetIt.instance.get<ArchiveChatProvider>().clearArchivedChats(
+            resetCount: true,
+          );
+        }
+        _logger.i('ArchiveChatProvider cleared');
+      } catch (e) {
+        _logger.w('Could not clear ArchiveChatProvider on logout: $e');
+      }
+
+      // Clear form controllers
+      _clearControllers();
+
+      // ✅ Wipe the contact-name caches directly as the LAST teardown step.
+      // resetContactProvider() above already calls this, but it runs before
+      // ChatProvider/ArchiveChatProvider are reset — the chat list rebuilds
+      // those trigger can re-run name resolution, and ContactNameService
+      // persists every resolved name fire-and-forget, so a stale entry can
+      // be written back to storage after the earlier clear. Doing it again
+      // here, once the UI providers are already emptied, closes that race.
+      try {
+        ContactNameService.instance.clearCache();
+        _logger.i('✅ ContactNameService cache cleared (final logout step)');
+      } catch (e) {
+        _logger.w('Could not clear ContactNameService cache on logout: $e');
+      }
+
+      // ✅ CRITICAL FIX: Clear avatar selection to prevent old user's avatar being used by new user
+      _logger.i('🧹 Clearing avatar selection and image data...');
+      clearImageSelection();
+      _logger.i(
+        '✅ Avatar cleanup completed - _selectedAvatar: $_selectedAvatar, _pictureType: $_pictureType, image: $image',
+      );
+
+      // Reset state
+      isSelectLoginType = AppString.phone;
+      isSelected = '';
+      _errorMessage = null;
+
+      _logger.i('Logout cleanup completed successfully');
+
+      // Reset logout loading state
+      _isLogout = false;
+
+      // Notify listeners
+      notifyListeners();
+    } catch (e) {
+      _logger.e('Error during logout cleanup', e);
+      // Reset logout loading state on error
+      _isLogout = false;
+      notifyListeners();
+      // Continue with logout even if cleanup fails
+    }
+  }
+
+  /// Handle account deletion with proper socket cleanup
+  Future<bool> handleAccountDeletion(BuildContext context) async {
+    try {
+      _logger.i('Handling account deletion');
+
+      // Call the API to delete account
+      final success = await userDeleteAccApi();
+
+      if (success) {
+        // Keep delete loading state during logout cleanup
+        _isDeleteAcc = true;
+        notifyListeners();
+
+        // If deletion was successful, clean up everything
+        if (context.mounted) {
+          await handleLogout(context);
+        }
+
+        // Reset delete loading state after cleanup
+        _isDeleteAcc = false;
+        notifyListeners();
+
+        _logger.i('Account deletion and cleanup completed successfully');
+        return true;
+      } else {
+        _logger.w('Account deletion API failed');
+        return false;
+      }
+    } catch (e) {
+      _logger.e('Error during account deletion', e);
+      // Ensure loading state is reset on error
+      _isDeleteAcc = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  void _clearControllers() {
+    emailcontroller.clear();
+    mobilecontroller.clear();
+    otpController.clear();
+    userNameController.clear();
+    fNameController.clear();
+    lNameController.clear();
+    countryController.clear();
+  }
+
+  /// Check if socket is connected (utility method)
+  bool get isSocketConnected {
+    try {
+      return GetIt.instance<SocketManager>().isConnected;
+    } catch (e) {
+      _logger.e('Error checking socket connection status', e);
+      return false;
+    }
+  }
+
+  /// Get socket connection status stream
+  ValueNotifier<bool> get socketConnectionStatus {
+    try {
+      return GetIt.instance<SocketManager>().connectionStatus;
+    } catch (e) {
+      _logger.e('Error getting socket connection status stream', e);
+      return ValueNotifier<bool>(false);
+    }
+  }
+
+  Future<String?> getCountryISOFromLocation() async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever ||
+          !await Geolocator.isLocationServiceEnabled()) {
+        return _useDeviceDetectedCountry();
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.low,
+          timeLimit: Duration(seconds: 10),
+        ),
+      );
+
+      final placemarks = await Geocoding().placemarkFromCoordinates(
+        position.latitude,
+        position.longitude,
+      );
+
+      final isoCode = placemarks.isEmpty
+          ? null
+          : placemarks.first.isoCountryCode;
+      if (isoCode == null || isoCode.isEmpty) {
+        return _useDeviceDetectedCountry();
+      }
+      final newCountry = isoCode.toUpperCase();
+
+      await SecurePrefs.setString(
+        SecureStorageKeys.COUNTRY_SHORT_NAME,
+        newCountry,
+      );
+
+      // ✅ Update ISO
+      defaultCountrySortName = newCountry;
+
+      // ✅ Convert ISO → Dial Code
+      final dialCode = getDialCodeFromISO(newCountry);
+
+      // ✅ Update selected dial code
+      selectedCountrycode = dialCode;
+
+      // Optional: clear phone number when country changes
+      mobilecontroller.clear();
+
+      countryShortName = newCountry;
+      notifyListeners();
+
+      return newCountry;
+    } catch (e) {
+      // placemarkFromCoordinates can throw (no Geocoder service / network) —
+      // never let that break the caller (e.g. logout).
+      _logger.w('Country detection from location failed: $e');
+      return _useDeviceDetectedCountry();
+    }
+  }
+
+  /// Fallback when GPS / reverse geocoding is unavailable: use the country
+  /// already detected from the device locale.
+  String _useDeviceDetectedCountry() {
+    final service = DeviceCountryCodeService.instance;
+    defaultCountrySortName = service.getDefaultIsoCode();
+    selectedCountrycode = service.getDefaultDialCodeWithPlus();
+    countryShortName = defaultCountrySortName;
+    notifyListeners();
+    return defaultCountrySortName;
+  }
+
+  @override
+  void dispose() {
+    userNameController.dispose();
+    _debounce?.cancel();
+    super.dispose();
+  }
+}

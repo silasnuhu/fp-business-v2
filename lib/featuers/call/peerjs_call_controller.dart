@@ -1,0 +1,1066 @@
+// =============================================================================
+// File: lib/featuers/call/peerjs_call_controller.dart
+//
+// PeerJS full-mesh media plane. Replaces the mediasoup SFU controller — the
+// backend (`whoxa-nest-api/src/calls`) no longer runs a media server at all.
+// Every participant opens a direct RTCPeerConnection to every other
+// participant; SDP/ICE is brokered by a standalone PeerServer, and the
+// `/calls` socket.io namespace only authenticates the participant, hands out
+// one unguessable peer id per call, shares the roster of peer ids, and relays
+// mic/cam on-off state. See PEERJS_MIGRATION.md.
+//
+// It keeps exactly the small surface CallManager depends on:
+//   - callbacks: onRemoteStreamAdded / onRemoteStreamRemoved / onLocalStream
+//                / onError / onCallEnded / onRemoteAudioStarted
+//                / onRemoteMediaState
+//   - getters:   localStream / isInitialized / ownsStreams
+//   - methods:   start / toggleAudio / toggleVideo / switchCamera / dispose
+//                / getConnectionStatus
+//
+// Signaling contract (PEERJS_MIGRATION.md §2 — calls.gateway.ts):
+//   emit  call:join        {callId} -> {selfPeerId, participants[], iceServers,
+//                                       peerServer}
+//   emit  call:mediaState  {callId, audio, video} -> {}
+//   emit  call:leave       {callId} -> {}
+//   recv  call:participantJoined {userId, peerId, mediaState:{audio,video}}
+//   recv  call:participantLeft   {userId}
+//   recv  call:mediaState        {userId, mediaState:{audio,video}}
+//   recv  call:ended             {callId, reason}
+//   recv  call:error             {...}
+//
+// The client stores NO PeerJS config of its own: host/port/path/key/secure and
+// the ICE/TURN servers all come from the `call:join` ack, every join.
+//
+// The ack contract is enforced by CallsSocketService.request(): an `{error}`
+// ack (or no ack) throws CallsSignalingException. There is no `{success:true}`
+// envelope.
+// =============================================================================
+
+import 'dart:async';
+
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:peerdart/peerdart.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:whoxa/core/services/socket/calls_socket_service.dart';
+import 'package:whoxa/featuers/call/call_model.dart';
+import 'package:whoxa/utils/logger.dart' show ConsoleAppLogger;
+
+class PeerJsCallController {
+  PeerJsCallController({CallsSocketService? callsSocket})
+    : _calls = callsSocket ?? CallsSocketService(),
+      _ownsSocket = callsSocket == null;
+
+  /// How long to wait for a dialled peer's first `stream` before re-dialling
+  /// once. Covers the callee's Peer not being registered on the PeerServer yet
+  /// when we first called them (PEERJS_MIGRATION.md §3).
+  static const Duration _dialRetryDelay = Duration(seconds: 5);
+
+  /// Settling time between closing every MediaConnection and re-dialling, so
+  /// the remote side processes the close before the new offer lands.
+  static const Duration _rebuildSettleDelay = Duration(milliseconds: 150);
+
+  static const Duration _peerOpenTimeout = Duration(seconds: 20);
+
+  /// Capture constraints. Unchanged from the SFU controller so call quality,
+  /// battery cost and the local preview all behave exactly as before.
+  static const Map<String, dynamic> _audioConstraints = {
+    'echoCancellation': true,
+    'noiseSuppression': true,
+    'autoGainControl': true,
+    // Mono keeps the echo canceller's reference signal intact (stereo capture
+    // splits it and measurably degrades suppression); 48k is Opus's native
+    // rate, so nothing gets resampled on the way out.
+    'sampleRate': 48000,
+    'channelCount': 1,
+  };
+  // 540p was the hard ceiling, which is why video looked soft on any modern
+  // phone. 720p/30 is the practical sweet spot: sharp enough to read faces,
+  // light enough that the bitrate cap below still leaves audio headroom.
+  static const Map<String, dynamic> _videoConstraints = {
+    'width': {'min': 320, 'ideal': 1280, 'max': 1280},
+    'height': {'min': 240, 'ideal': 720, 'max': 720},
+    'frameRate': {'min': 15, 'ideal': 30, 'max': 30},
+    'facingMode': 'user',
+  };
+
+  final CallsSocketService _calls;
+  final bool _ownsSocket;
+  final _logger = ConsoleAppLogger.forModule('PeerJsCall');
+
+  // Peer / mesh state
+  Peer? _peer;
+  String? _selfPeerId;
+  _PeerServerConfig? _peerServer;
+  List<Map<String, dynamic>> _iceServers = const [];
+  StreamSubscription<dynamic>? _peerCallSub;
+  StreamSubscription<dynamic>? _peerErrorSub;
+  StreamSubscription<dynamic>? _peerOpenSub;
+
+  /// The live MediaConnection per remote user id — exactly one per pair.
+  final Map<String, MediaConnection> _connections = {};
+
+  /// Per-peer call-quality samplers (bitrate / loss / jitter).
+  final Map<String, Timer> _statsTimers = {};
+
+  /// Event subscriptions per MediaConnection, keyed by its connectionId.
+  final Map<String, List<StreamSubscription<dynamic>>> _connectionSubs = {};
+
+  /// Roster: remote user id -> their PeerServer peer id.
+  final Map<String, String> _peerIds = {};
+
+  /// Last known mic/cam state per remote user id (PEERJS_MIGRATION.md §4).
+  final Map<String, _MediaFlags> _mediaFlags = {};
+
+  final Map<String, MediaStream> _remoteStreams = {};
+  final Map<String, Timer> _dialRetryTimers = {};
+  final Set<String> _dialRetried = {};
+
+  // Local media
+  MediaStream? _localStream;
+
+  /// Camera streams captured after the initial `getUserMedia` (turning the
+  /// camera on in a call that started without one). Their tracks are spliced
+  /// into [_localStream], so the wrapper must be kept alive until dispose().
+  final List<MediaStream> _auxStreams = [];
+
+  // Call context
+  String? _callId;
+  String? _myUserId;
+  CallType? _callType;
+  bool _closed = false;
+  bool _started = false;
+  bool _rejoining = false;
+  bool _remoteAudioStarted = false;
+
+  // Callbacks — same shape CallManager wired for the SFU controller.
+  void Function(String peerId, MediaStream stream)? onRemoteStreamAdded;
+  void Function(String peerId)? onRemoteStreamRemoved;
+  void Function(MediaStream stream)? onLocalStream;
+  void Function(String error)? onError;
+
+  /// Fired when the call is torn down from the media plane (server
+  /// `call:ended`, or an unrecoverable `/calls` namespace drop mid-call).
+  /// CallManager turns this into its normal end-of-call cleanup.
+  void Function(String reason)? onCallEnded;
+
+  /// Fired once, when the first remote audio starts playing out — the moment
+  /// CallManager should re-assert the earpiece/speaker route.
+  void Function()? onRemoteAudioStarted;
+
+  /// A remote peer's mic/camera state changed (PEERJS_MIGRATION.md §4). There
+  /// are no server-side media objects any more, so this is pure signalling:
+  /// [audio] false means muted, [video] false means camera off. Lets
+  /// CallManager swap the frozen last video frame for an avatar placeholder
+  /// (and drive the mic-muted indicator) instead of leaving a stale frame on
+  /// screen — a disabled track stops sending RTP but the connection stays up,
+  /// so the renderer would otherwise hold the last decoded frame indefinitely.
+  void Function(String peerId, bool audio, bool video)? onRemoteMediaState;
+
+  MediaStream? get localStream => _localStream;
+  bool get isInitialized => _peer != null && _localStream != null;
+
+  /// True — this backend owns every media track (local and remote); the UI
+  /// must only detach renderers, never stop/dispose the tracks.
+  bool get ownsStreams => true;
+
+  /// Diagnostic snapshot for debug dumps.
+  Map<String, dynamic> getConnectionStatus() {
+    final roster = _peerIds.keys.toSet();
+    final connected = _connections.keys.toSet();
+    return {
+      'active': _started && !_closed,
+      'callId': _callId,
+      'callType': _callType?.name,
+      'selfPeerId': _selfPeerId,
+      'peerOpen': _peer?.open ?? false,
+      'peerServer': _peerServer?.describe(),
+      'iceServers': _iceServers.length,
+      'rosterPeers': roster.length,
+      'mediaConnections': connected.length,
+      'undialled': roster.difference(connected).toList(),
+      'remoteStreams': _remoteStreams.keys.toList(),
+      'rejoining': _rejoining,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Public API
+  // ---------------------------------------------------------------------------
+
+  /// Connect to `/calls`, join the room for [callId], capture local
+  /// audio/video, and build a full mesh with everyone already present.
+  Future<void> start({
+    required String callId,
+    required String userId,
+    required CallType callType,
+  }) async {
+    if (_started) {
+      _logger.w('start() called twice — ignoring');
+      return;
+    }
+    _started = true;
+    _callId = callId;
+    _myUserId = userId;
+    _callType = callType;
+
+    try {
+      _logger.i(
+        '🚀 PeerJS: starting mesh call — callId=$callId, type=${callType.name}',
+      );
+
+      // Runtime permissions FIRST. The redesigned onboarding flow only asks
+      // for notifications, so on a fresh install camera/mic are still in the
+      // OS "ask" state and getUserMedia throws ("cannot find camera") before
+      // any signaling happens — which also means the callee never gets a
+      // roster and nothing rings. Ask here, once, with a clear failure.
+      await _ensureMediaPermissions(callType);
+
+      // Capture local media FIRST, before any signaling. getUserMedia does not
+      // depend on the roster, and doing it up front means the local preview
+      // renders immediately (via onLocalStream) instead of only after the
+      // whole `/calls` connect + join + PeerServer handshake.
+      await _getUserMedia(callType);
+
+      final connected = await _calls.connect();
+      if (!connected) {
+        throw StateError('could not open /calls namespace connection');
+      }
+      _calls.onDisconnected = (reason) {
+        // Recoverable: socket.io is retrying. The mesh is dead until it comes
+        // back, and _calls.onReconnected drives the rejoin.
+        _logger.w('⚠️ PeerJS: /calls dropped ($reason) — awaiting reconnect');
+      };
+      _calls.onReconnected = () => unawaited(_rejoin());
+      _calls.onDropped = (reason) {
+        _logger.e('❌ PeerJS: /calls unrecoverable ($reason) — ending call');
+        onError?.call('Call connection lost');
+        onCallEnded?.call('connection_lost');
+      };
+      _registerSocketListeners();
+
+      await _joinAndBuildMesh();
+
+      _logger.i('✅ PeerJS: call fully started');
+    } catch (e, st) {
+      _logger.e('❌ PeerJS: start failed: $e\n$st');
+      onError?.call('PeerJS call failed: $e');
+      rethrow;
+    }
+  }
+
+  /// Mute/unmute the microphone. A disabled track stops sending RTP with no
+  /// renegotiation, so this is a local flip plus one `call:mediaState` emit
+  /// (PEERJS_MIGRATION.md §4).
+  void toggleAudio(bool enabled) {
+    for (final t
+        in _localStream?.getAudioTracks() ?? const <MediaStreamTrack>[]) {
+      t.enabled = enabled;
+    }
+    _logger.i('🎤 PeerJS: mic ${enabled ? 'unmuted' : 'muted'}');
+    unawaited(_publishMediaState());
+  }
+
+  /// Camera on/off. Flipping an existing track needs no renegotiation; adding
+  /// one where there was none changes the local track SET, which a PeerJS
+  /// MediaConnection cannot renegotiate — so the mesh is rebuilt
+  /// (PEERJS_MIGRATION.md §3).
+  Future<void> toggleVideo(bool enabled) async {
+    final stream = _localStream;
+    if (stream == null) return;
+
+    final videoTracks = stream.getVideoTracks();
+    if (videoTracks.isNotEmpty) {
+      for (final t in videoTracks) {
+        t.enabled = enabled;
+      }
+      _logger.i('📹 PeerJS: camera ${enabled ? 'on' : 'off'}');
+      await _publishMediaState();
+      return;
+    }
+
+    if (!enabled) {
+      await _publishMediaState();
+      return;
+    }
+
+    // No video track at all (audio call, or the initial camera capture
+    // failed): capture one, splice it into the local stream, rebuild.
+    try {
+      _logger.i('📹 PeerJS: no video track — capturing camera and rebuilding');
+      final camStream = await navigator.mediaDevices.getUserMedia({
+        'audio': false,
+        'video': _videoConstraints,
+      });
+      final captured = camStream.getVideoTracks();
+      if (captured.isEmpty) {
+        _logger.w('⚠️ PeerJS: camera capture returned no video track');
+        return;
+      }
+      _auxStreams.add(camStream);
+      await stream.addTrack(captured.first);
+      onLocalStream?.call(stream);
+      await _rebuildConnections();
+      await _publishMediaState();
+    } catch (e) {
+      _logger.e('❌ PeerJS: could not turn the camera on: $e');
+      onError?.call('Could not turn the camera on: $e');
+    }
+  }
+
+  Future<void> switchCamera() async {
+    final tracks = _localStream?.getVideoTracks() ?? const <MediaStreamTrack>[];
+    if (tracks.isNotEmpty) {
+      try {
+        await Helper.switchCamera(tracks.first);
+      } catch (e) {
+        _logger.w('⚠️ PeerJS: switchCamera failed: $e');
+      }
+    }
+  }
+
+  Future<void> dispose() async {
+    if (_closed) return;
+    _closed = true;
+    _logger.i('🧹 PeerJS: disposing');
+
+    _removeSocketListeners();
+    if (_callId != null) {
+      try {
+        _calls.emit('call:leave', {'callId': _callId});
+      } catch (_) {}
+    }
+
+    _teardownMesh(notify: false);
+
+    // The mesh owns the capture stream; nothing else is using these tracks now.
+    for (final track
+        in _localStream?.getTracks() ?? const <MediaStreamTrack>[]) {
+      try {
+        await track.stop();
+      } catch (_) {}
+    }
+    try {
+      await _localStream?.dispose();
+    } catch (_) {}
+    _localStream = null;
+
+    for (final aux in _auxStreams) {
+      for (final track in aux.getTracks()) {
+        try {
+          await track.stop();
+        } catch (_) {}
+      }
+      try {
+        await aux.dispose();
+      } catch (_) {}
+    }
+    _auxStreams.clear();
+
+    _remoteAudioStarted = false;
+    _selfPeerId = null;
+    _peerServer = null;
+    _iceServers = const [];
+
+    if (_ownsSocket) _calls.disconnect();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Join / mesh construction
+  // ---------------------------------------------------------------------------
+
+  /// `call:join`, open the Peer with the config the ack carries, answer
+  /// whoever dials us, dial everyone already in the room, then report our own
+  /// media state. Used for the initial join AND for the §5 rejoin.
+  Future<void> _joinAndBuildMesh() async {
+    final callId = _callId;
+    if (callId == null) throw StateError('no callId');
+
+    final ack = await _calls.request('call:join', {'callId': callId});
+
+    final selfPeerId = ack['selfPeerId']?.toString();
+    if (selfPeerId == null || selfPeerId.isEmpty) {
+      throw StateError('call:join ack missing selfPeerId');
+    }
+    _selfPeerId = selfPeerId;
+
+    _iceServers = _asMapList(ack['iceServers']);
+    final peerServer = _PeerServerConfig.fromMap(_asMap(ack['peerServer']));
+    if (peerServer == null) {
+      throw StateError('call:join ack missing peerServer config');
+    }
+    _peerServer = peerServer;
+
+    final participants = (ack['participants'] as List?) ?? const [];
+    _logger.i(
+      '🤝 PeerJS: joined — selfPeerId=$selfPeerId '
+      'participants=${participants.length} iceServers=${_iceServers.length} '
+      'peerServer=${peerServer.describe()}',
+    );
+    if (_iceServers.isEmpty) {
+      _logger.w(
+        '⚠️ PeerJS: call:join returned NO iceServers — a mesh has no media '
+        'relay of its own, so peers behind symmetric NAT will not connect',
+      );
+    }
+
+    // Seed the roster and the initial mic/cam flags before any media arrives,
+    // so a peer who joined muted never flashes as unmuted (§4).
+    for (final raw in participants) {
+      final p = _asMap(raw);
+      final userId = p?['userId']?.toString();
+      final peerId = p?['peerId']?.toString();
+      if (userId == null || peerId == null) continue;
+      if (userId == _myUserId) continue;
+      _peerIds[userId] = peerId;
+      _applyRemoteMediaState(userId, _asMap(p?['mediaState']));
+    }
+
+    await _openPeer(selfPeerId, peerServer);
+
+    // Dial everyone already here. Existing members never dial us back on
+    // `call:participantJoined` — they answer our call — so this gives exactly
+    // one MediaConnection per pair (§3, "Who dials whom").
+    for (final entry in Map<String, String>.from(_peerIds).entries) {
+      _dial(entry.key, entry.value);
+    }
+
+    // Tell the room our real state; the server default is
+    // {audio:true, video:false} until we do (§4).
+    await _publishMediaState();
+  }
+
+  Future<void> _openPeer(String selfPeerId, _PeerServerConfig cfg) async {
+    final peer = Peer(
+      id: selfPeerId,
+      options: PeerOptions(
+        host: cfg.host,
+        port: cfg.port,
+        path: cfg.path,
+        key: cfg.key,
+        secure: cfg.secure,
+        debug: LogLevel.Warnings,
+        // The ICE/TURN credentials are issued per `call:join`; pass them
+        // straight through (§6). Unified plan is what flutter_webrtc speaks.
+        config: {'iceServers': _iceServers, 'sdpSemantics': 'unified-plan'},
+      ),
+    );
+    _peer = peer;
+
+    // Subscribe BEFORE awaiting `open`: the emitter is a plain broadcast
+    // stream with no replay, so an OFFER landing between open and the
+    // subscription would be dropped on the floor.
+    _peerCallSub = peer.on<MediaConnection>('call').listen(_onIncomingCall);
+
+    // Race open against error, rather than just waiting for open: a rejected
+    // registration (ID-TAKEN, INVALID-KEY, an unreachable PeerServer) reports
+    // itself on `error` and never opens, so waiting only on `open` would burn
+    // the whole timeout before failing.
+    final opened = Completer<void>();
+    _peerErrorSub = peer.on<dynamic>('error').listen((e) {
+      _logger.e('❌ PeerJS: peer error — $e');
+      if (!opened.isCompleted) {
+        opened.completeError(
+          StateError('PeerServer rejected $selfPeerId (${cfg.describe()}): $e'),
+        );
+      }
+    });
+    _peerOpenSub = peer.on<String?>('open').listen((_) {
+      if (!opened.isCompleted) opened.complete();
+    });
+
+    try {
+      await opened.future.timeout(_peerOpenTimeout);
+    } on TimeoutException {
+      throw StateError(
+        'PeerServer did not open $selfPeerId within '
+        '${_peerOpenTimeout.inSeconds}s (${cfg.describe()})',
+      );
+    } finally {
+      unawaited(_peerOpenSub?.cancel());
+      _peerOpenSub = null;
+    }
+    _logger.i('✅ PeerJS: peer open as $selfPeerId');
+  }
+
+  /// Someone dialled us. Answer with the local stream and wire the connection
+  /// up; we never dial back (§3).
+  void _onIncomingCall(MediaConnection mc) {
+    if (_closed) return;
+    final stream = _localStream;
+    if (stream == null) {
+      _logger.w('⚠️ PeerJS: incoming call from ${mc.peer} with no local stream');
+      return;
+    }
+    final userId = _userIdFromPeerId(mc.peer);
+    _logger.i('📞 PeerJS: answering incoming call from $userId (${mc.peer})');
+
+    _peerIds.putIfAbsent(userId, () => mc.peer);
+    // Wire before answering: negotiation is async, but this guarantees the
+    // `stream` event cannot arrive before we are listening for it.
+    _wire(mc, userId, initiatedByUs: false);
+    try {
+      mc.answer(stream);
+    } catch (e) {
+      _logger.e('❌ PeerJS: answer failed for $userId: $e');
+    }
+  }
+
+  void _dial(String userId, String peerId) {
+    if (_closed) return;
+    if (userId == _myUserId) return;
+    final peer = _peer;
+    final stream = _localStream;
+    if (peer == null || stream == null) return;
+
+    try {
+      _logger.i('📞 PeerJS: dialling $userId ($peerId)');
+      final mc = peer.call(peerId, stream);
+      _wire(mc, userId, initiatedByUs: true);
+    } catch (e) {
+      _logger.e('❌ PeerJS: dial failed for $userId: $e');
+      onError?.call('Could not connect to a participant: $e');
+    }
+  }
+
+  /// Attach stream/close handlers to [mc] and make it the live connection for
+  /// [userId]. A brief double connection can happen if two peers rebuild at the
+  /// same instant; keep the newest and close the previous (§3).
+  void _wire(MediaConnection mc, String userId, {required bool initiatedByUs}) {
+    final previous = _connections[userId];
+    if (previous != null && previous.connectionId != mc.connectionId) {
+      _logger.i(
+        '🔁 PeerJS: replacing MediaConnection for $userId — keeping the newest',
+      );
+      _closeConnection(previous);
+    }
+    _connections[userId] = mc;
+
+    _connectionSubs[mc.connectionId] = [
+      mc.on<MediaStream>('stream').listen(
+        (stream) => unawaited(_onRemoteStream(userId, mc, stream)),
+      ),
+      mc.on<dynamic>('close').listen((_) => _onConnectionClosed(userId, mc)),
+    ];
+
+    // Quality work is best-effort: never let it break the call.
+    unawaited(_tuneVideoSender(mc));
+    _startStatsSampling(mc, userId);
+
+    // Only the dialling side retries; the answering side would create a
+    // duplicate connection for the pair.
+    if (initiatedByUs) _armDialRetry(userId);
+  }
+
+  /// Cap the outbound video bitrate so a congested uplink degrades the
+  /// picture instead of starving the audio (which is what "call sounds
+  /// broken" usually is).
+  Future<void> _tuneVideoSender(MediaConnection mc) async {
+    try {
+      final pc = mc.peerConnection;
+      if (pc == null) return;
+      for (final sender in await pc.getSenders()) {
+        final track = sender.track;
+        if (track == null || track.kind != 'video') continue;
+        final params = sender.parameters;
+        final encodings = params.encodings;
+        if (encodings == null || encodings.isEmpty) continue;
+        for (final encoding in encodings) {
+          encoding.maxBitrate = 900000;
+          encoding.maxFramerate = 30;
+        }
+        await sender.setParameters(params);
+        _logger.i('🎚️ PeerJS: video sender capped at 900 kbps / 30 fps');
+      }
+    } catch (e) {
+      _logger.e('PeerJS: could not tune video sender: $e');
+    }
+  }
+
+  /// Sample inbound audio every 5s so a bad call produces numbers (bitrate,
+  /// packet loss, jitter) instead of a subjective complaint.
+  void _startStatsSampling(MediaConnection mc, String userId) {
+    _statsTimers.remove(userId)?.cancel();
+    var lastBytes = 0;
+    var lastLost = 0;
+    _statsTimers[userId] = Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (_closed || _connections[userId]?.connectionId != mc.connectionId) {
+        timer.cancel();
+        _statsTimers.remove(userId);
+        return;
+      }
+      try {
+        final pc = mc.peerConnection;
+        if (pc == null) return;
+        for (final report in await pc.getStats()) {
+          final values = report.values;
+          if (report.type != 'inbound-rtp') continue;
+          final kind = '${values['kind'] ?? values['mediaType'] ?? ''}';
+          if (kind != 'audio') continue;
+          final bytes = int.tryParse('${values['bytesReceived'] ?? 0}') ?? 0;
+          final lost = int.tryParse('${values['packetsLost'] ?? 0}') ?? 0;
+          final kbps = ((bytes - lastBytes) * 8 / 5 / 1000).round();
+          final lostDelta = lost - lastLost;
+          lastBytes = bytes;
+          lastLost = lost;
+          _logger.i(
+            '📊 call audio [$userId]: ${kbps}kbps, lost+$lostDelta, '
+            'jitter=${values['jitter']}',
+          );
+        }
+      } catch (_) {
+        // Stats are diagnostic only.
+      }
+    });
+  }
+
+  Future<void> _onRemoteStream(
+    String userId,
+    MediaConnection mc,
+    MediaStream stream,
+  ) async {
+    if (_closed) return;
+    // Ignore a stream from a connection that has already been superseded.
+    if (_connections[userId]?.connectionId != mc.connectionId) return;
+
+    _cancelDialRetry(userId);
+    await _mirrorReceiverTracks(mc, stream);
+
+    _remoteStreams[userId] = stream;
+    _logger.i(
+      '✅ PeerJS: remote stream ready for $userId '
+      '(audio=${stream.getAudioTracks().length}, '
+      'video=${stream.getVideoTracks().length})',
+    );
+    onRemoteStreamAdded?.call(userId, stream);
+
+    // Re-apply the last known media state on every fresh stream so a peer who
+    // joined muted / camera-off doesn't flash as live (§4).
+    final flags = _mediaFlags[userId];
+    if (flags != null) {
+      onRemoteMediaState?.call(userId, flags.audio, flags.video);
+    }
+
+    if (!_remoteAudioStarted && stream.getAudioTracks().isNotEmpty) {
+      _remoteAudioStarted = true;
+      onRemoteAudioStarted?.call();
+    }
+  }
+
+  /// Splice the connection's receiver tracks onto the stream the UI reads.
+  ///
+  /// On iOS the Dart-side track mirror of a stream delivered by `onTrack` is
+  /// only populated for the first track; a video track that arrives afterwards
+  /// renders natively but `getVideoTracks()` stays empty, so CallManager
+  /// computes `hasVideo:false` and shows the avatar over live video. Add the
+  /// missing ones ourselves, Dart-side only (`addToNative:false`) — idempotent
+  /// if the platform event does arrive later.
+  Future<void> _mirrorReceiverTracks(
+    MediaConnection mc,
+    MediaStream stream,
+  ) async {
+    final pc = mc.peerConnection;
+    if (pc == null) return;
+    try {
+      for (final receiver in await pc.getReceivers()) {
+        final track = receiver.track;
+        if (track == null) continue;
+        final mirrored = track.kind == 'audio'
+            ? stream.getAudioTracks()
+            : stream.getVideoTracks();
+        if (mirrored.any((t) => t.id == track.id)) continue;
+        await stream.addTrack(track, addToNative: false);
+        _logger.i(
+          '🩹 PeerJS: attached ${track.kind} track ${track.id} to remote '
+          'stream ${stream.id} (platform mirror was missing it)',
+        );
+      }
+    } catch (e) {
+      _logger.w('⚠️ PeerJS: could not mirror receiver tracks: $e');
+    }
+  }
+
+  void _onConnectionClosed(String userId, MediaConnection mc) {
+    if (_closed) return;
+    // A close from a connection we already replaced is not interesting.
+    if (_connections[userId]?.connectionId != mc.connectionId) return;
+    _logger.i('🔌 PeerJS: MediaConnection to $userId closed');
+    _dropConnection(userId);
+  }
+
+  void _dropConnection(String userId, {bool notify = true}) {
+    _cancelDialRetry(userId);
+    final mc = _connections.remove(userId);
+    if (mc != null) _closeConnection(mc);
+    final hadStream = _remoteStreams.remove(userId) != null;
+    if (notify && hadStream) {
+      _logger.i('👋 PeerJS: remote stream removed for $userId');
+      onRemoteStreamRemoved?.call(userId);
+    }
+  }
+
+  void _closeConnection(MediaConnection mc) {
+    for (final sub
+        in _connectionSubs.remove(mc.connectionId) ??
+            const <StreamSubscription<dynamic>>[]) {
+      unawaited(sub.cancel());
+    }
+    try {
+      // Closes the RTCPeerConnection only — the shared local capture stream is
+      // untouched (see the MESH FIX in packages/peerdart).
+      mc.close();
+    } catch (e) {
+      _logger.w('⚠️ PeerJS: MediaConnection close failed: $e');
+    }
+    try {
+      _peer?.removeConnection(mc);
+    } catch (_) {}
+  }
+
+  void _armDialRetry(String userId) {
+    _dialRetryTimers.remove(userId)?.cancel();
+    _dialRetryTimers[userId] = Timer(_dialRetryDelay, () {
+      _dialRetryTimers.remove(userId);
+      if (_closed) return;
+      if (_remoteStreams.containsKey(userId)) return;
+
+      final peerId = _peerIds[userId];
+      if (peerId == null) return; // no longer in the roster
+      if (!_dialRetried.add(userId)) return; // once only
+
+      _logger.w(
+        '🔁 PeerJS: no stream from $userId after '
+        '${_dialRetryDelay.inSeconds}s — re-dialling once',
+      );
+      final stale = _connections.remove(userId);
+      if (stale != null) _closeConnection(stale);
+      _dial(userId, peerId);
+    });
+  }
+
+  void _cancelDialRetry(String userId) {
+    _dialRetryTimers.remove(userId)?.cancel();
+  }
+
+  /// PeerJS MediaConnections cannot renegotiate an added or removed track,
+  /// only replaceTrack an existing one. So whenever the local track SET
+  /// changes shape, close every connection, let the remotes process it, and
+  /// dial everyone again (§3, "Rebuild connections"). Only the side whose
+  /// media changed rebuilds; the other side just gets a fresh incoming call.
+  Future<void> _rebuildConnections() async {
+    if (_closed) return;
+    final roster = Map<String, String>.from(_peerIds);
+    _logger.i('🔁 PeerJS: rebuilding ${_connections.length} connection(s)');
+
+    for (final userId in _connections.keys.toList()) {
+      // Keep the tiles: the same peers' replacement streams arrive shortly.
+      _dropConnection(userId, notify: false);
+    }
+
+    await Future.delayed(_rebuildSettleDelay);
+    if (_closed) return;
+
+    _dialRetried.clear();
+    for (final entry in roster.entries) {
+      _dial(entry.key, entry.value);
+    }
+  }
+
+  /// PEERJS_MIGRATION.md §5: the Peer and every MediaConnection die with the
+  /// socket.io connection, so a reconnect means a FULL rejoin — tear
+  /// everything down (except the capture stream, which is still ours) and run
+  /// the join flow again. We get a new selfPeerId; the others see us leave and
+  /// rejoin.
+  Future<void> _rejoin() async {
+    if (_closed || _rejoining) return;
+    _rejoining = true;
+    try {
+      _logger.w('🔄 PeerJS: /calls reconnected — full rejoin');
+      _teardownMesh(notify: true);
+      await _joinAndBuildMesh();
+      _logger.i('✅ PeerJS: rejoin complete');
+    } catch (e) {
+      _logger.e('❌ PeerJS: rejoin failed: $e');
+      onError?.call('Failed to rejoin the call: $e');
+    } finally {
+      _rejoining = false;
+    }
+  }
+
+  /// Drop the whole mesh (peer, connections, roster, remote streams) while
+  /// keeping the local capture stream alive.
+  void _teardownMesh({required bool notify}) {
+    for (final timer in _dialRetryTimers.values) {
+      timer.cancel();
+    }
+    _dialRetryTimers.clear();
+    _dialRetried.clear();
+
+    for (final userId in _connections.keys.toList()) {
+      _dropConnection(userId, notify: notify);
+    }
+    _connections.clear();
+    for (final subs in _connectionSubs.values) {
+      for (final sub in subs) {
+        unawaited(sub.cancel());
+      }
+    }
+    _connectionSubs.clear();
+
+    if (notify) {
+      for (final userId in _remoteStreams.keys.toList()) {
+        onRemoteStreamRemoved?.call(userId);
+      }
+    }
+    _remoteStreams.clear();
+    _peerIds.clear();
+    _mediaFlags.clear();
+
+    unawaited(_peerCallSub?.cancel());
+    unawaited(_peerErrorSub?.cancel());
+    unawaited(_peerOpenSub?.cancel());
+    _peerCallSub = null;
+    _peerErrorSub = null;
+    _peerOpenSub = null;
+    try {
+      _peer?.dispose();
+    } catch (e) {
+      _logger.w('⚠️ PeerJS: peer dispose failed: $e');
+    }
+    _peer = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Media state
+  // ---------------------------------------------------------------------------
+
+  /// Broadcast our real mic/camera state to the room (§4). Best-effort: a
+  /// failed emit only costs the others a stale indicator, never the call.
+  Future<void> _publishMediaState() async {
+    final callId = _callId;
+    if (callId == null || _closed) return;
+    final stream = _localStream;
+    final audio =
+        stream?.getAudioTracks().any((t) => t.enabled == true) ?? false;
+    final video =
+        stream?.getVideoTracks().any((t) => t.enabled == true) ?? false;
+    try {
+      await _calls.request('call:mediaState', {
+        'callId': callId,
+        'audio': audio,
+        'video': video,
+      });
+      _logger.i('📤 PeerJS: call:mediaState audio=$audio video=$video');
+    } catch (e) {
+      _logger.w('⚠️ PeerJS: call:mediaState failed: $e');
+    }
+  }
+
+  void _applyRemoteMediaState(String userId, Map<String, dynamic>? mediaState) {
+    // Server default for a just-joined participant, until they emit their own.
+    final audio = mediaState?['audio'] as bool? ?? true;
+    final video = mediaState?['video'] as bool? ?? false;
+    _mediaFlags[userId] = _MediaFlags(audio: audio, video: video);
+    _logger.i('⏯️ PeerJS: $userId audio=$audio video=$video');
+    onRemoteMediaState?.call(userId, audio, video);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Socket broadcasts
+  // ---------------------------------------------------------------------------
+
+  /// A newcomer joined. Do NOT dial — they dial us and we answer via
+  /// `peer.on('call')`, which keeps it to one MediaConnection per pair (§3).
+  void _onParticipantJoined(dynamic data) {
+    final map = _asMap(data);
+    if (map == null) return;
+    final userId = map['userId']?.toString();
+    final peerId = map['peerId']?.toString();
+    if (userId == null || peerId == null) return;
+    if (userId == _myUserId) return;
+
+    _logger.i('👤 PeerJS: participant joined — $userId ($peerId)');
+    _peerIds[userId] = peerId;
+    _dialRetried.remove(userId);
+    _applyRemoteMediaState(userId, _asMap(map['mediaState']));
+  }
+
+  void _onParticipantLeft(dynamic data) {
+    final userId = _asMap(data)?['userId']?.toString();
+    if (userId == null) return;
+    _logger.i('👋 PeerJS: participant left — $userId');
+    _peerIds.remove(userId);
+    _mediaFlags.remove(userId);
+    _dialRetried.remove(userId);
+    _dropConnection(userId);
+  }
+
+  void _onMediaState(dynamic data) {
+    final map = _asMap(data);
+    if (map == null) return;
+    final userId = map['userId']?.toString();
+    if (userId == null || userId == _myUserId) return;
+    _applyRemoteMediaState(userId, _asMap(map['mediaState']));
+  }
+
+  void _onCallEnded(dynamic data) {
+    final reason = _asMap(data)?['reason']?.toString() ?? 'ended';
+    _logger.i('🔚 PeerJS: server call:ended ($reason)');
+    onCallEnded?.call(reason);
+  }
+
+  void _onCallError(dynamic data) {
+    final message = _asMap(data)?['message']?.toString() ?? 'call error';
+    _logger.e('❌ PeerJS: server call:error — $message');
+    onError?.call(message);
+  }
+
+  void _registerSocketListeners() {
+    _calls.on('call:participantJoined', _onParticipantJoined);
+    _calls.on('call:participantLeft', _onParticipantLeft);
+    _calls.on('call:mediaState', _onMediaState);
+    _calls.on('call:ended', _onCallEnded);
+    _calls.on('call:error', _onCallError);
+  }
+
+  void _removeSocketListeners() {
+    _calls.off('call:participantJoined', _onParticipantJoined);
+    _calls.off('call:participantLeft', _onParticipantLeft);
+    _calls.off('call:mediaState', _onMediaState);
+    _calls.off('call:ended', _onCallEnded);
+    _calls.off('call:error', _onCallError);
+    _calls.onDisconnected = null;
+    _calls.onReconnected = null;
+    _calls.onDropped = null;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  /// Make sure the OS has actually granted mic (and camera, for video calls).
+  /// Throws a [MediaPermissionException] with a user-facing message when the
+  /// user refuses, so the call screen shows "microphone blocked" instead of a
+  /// generic plugin error.
+  Future<void> _ensureMediaPermissions(CallType callType) async {
+    final wanted = <Permission>[
+      Permission.microphone,
+      if (callType == CallType.video) Permission.camera,
+    ];
+
+    final missing = <Permission, PermissionStatus>{};
+    for (final permission in wanted) {
+      var status = await permission.status;
+      if (status.isDenied || status.isLimited) {
+        status = await permission.request();
+      }
+      if (!status.isGranted && !status.isLimited) {
+        missing[permission] = status;
+      }
+    }
+
+    if (missing.isEmpty) return;
+
+    if (missing.values.every((s) => s.isPermanentlyDenied)) {
+      throw const MediaPermissionException(
+        'Camera and microphone are blocked in system settings. '
+        'Open Settings → Permissions and allow them, then try again.',
+        permanentlyDenied: true,
+      );
+    }
+    final what = missing.keys
+        .map((p) => p == Permission.camera ? 'camera' : 'microphone')
+        .join(' and ');
+    throw MediaPermissionException('Access to the $what is needed to make this call.');
+  }
+
+  Future<void> _getUserMedia(CallType callType) async {
+    final constraints = <String, dynamic>{
+      'audio': _audioConstraints,
+      'video': callType == CallType.video ? _videoConstraints : false,
+    };
+
+    _localStream = await navigator.mediaDevices.getUserMedia(constraints);
+    _logger.i(
+      '📹 PeerJS: got local stream — audio=${_localStream!.getAudioTracks().length}, '
+      'video=${_localStream!.getVideoTracks().length}',
+    );
+    if (_localStream!.getAudioTracks().isEmpty) {
+      _logger.e('❌ PeerJS: no audio track captured — call would be silent');
+      onError?.call('Microphone unavailable');
+    }
+    onLocalStream?.call(_localStream!);
+  }
+
+  /// `selfPeerId` is `<userId>-<callId>-<random>`; the separator is `-`
+  /// because PeerJS id validation rejects a colon (§2).
+  String _userIdFromPeerId(String peerId) => peerId.split('-').first;
+
+  List<Map<String, dynamic>> _asMapList(dynamic value) {
+    if (value is! List) return const [];
+    return value
+        .map(_asMap)
+        .whereType<Map<String, dynamic>>()
+        .toList(growable: false);
+  }
+
+  Map<String, dynamic>? _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+    if (value is Map) return Map<String, dynamic>.from(value);
+    return null;
+  }
+}
+
+/// Mic/camera state of one remote participant (`call:mediaState`).
+class _MediaFlags {
+  const _MediaFlags({required this.audio, required this.video});
+  final bool audio;
+  final bool video;
+}
+
+/// Everything needed to construct the Peer, straight from the `call:join` ack.
+/// The client keeps no PeerJS config of its own (PEERJS_MIGRATION.md §6).
+class _PeerServerConfig {
+  const _PeerServerConfig({
+    required this.host,
+    required this.port,
+    required this.path,
+    required this.key,
+    required this.secure,
+  });
+
+  final String host;
+  final int port;
+  final String path;
+  final String key;
+  final bool secure;
+
+  static _PeerServerConfig? fromMap(Map<String, dynamic>? map) {
+    if (map == null) return null;
+    final host = map['host']?.toString();
+    if (host == null || host.isEmpty) return null;
+    final secure = map['secure'] as bool? ?? true;
+    return _PeerServerConfig(
+      host: host,
+      port: int.tryParse(map['port']?.toString() ?? '') ?? (secure ? 443 : 80),
+      path: map['path']?.toString() ?? '/peerjs',
+      key: map['key']?.toString() ?? 'peerjs',
+      secure: secure,
+    );
+  }
+
+  String describe() =>
+      '${secure ? 'wss' : 'ws'}://$host:$port$path (key=$key)';
+}
+
+/// Thrown when the OS refuses camera/microphone access for a call, so the
+/// call screen can say something actionable instead of surfacing a raw
+/// plugin error.
+class MediaPermissionException implements Exception {
+  const MediaPermissionException(this.message, {this.permanentlyDenied = false});
+
+  final String message;
+  final bool permanentlyDenied;
+
+  @override
+  String toString() => message;
+}

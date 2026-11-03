@@ -1,0 +1,1399 @@
+import 'package:flutter/material.dart';
+import 'package:whoxa/featuers/provider/theme_provider.dart';
+import 'package:provider/provider.dart';
+import 'package:whoxa/core/api/api_client.dart';
+import 'package:whoxa/core/navigation_helper.dart';
+import 'package:whoxa/dependency_injection.dart';
+import 'package:whoxa/design/fp_components.dart';
+import 'package:whoxa/design/fp_tokens.dart';
+import 'package:whoxa/featuers/chat/data/chat_list_model.dart';
+import 'package:whoxa/featuers/chat/provider/chat_provider.dart';
+import 'package:whoxa/featuers/chat/repository/conversation_repository.dart';
+import 'package:whoxa/featuers/chat/screens/archived_chat_list_screen.dart';
+import 'package:whoxa/utils/preference_key/constant/app_routes.dart';
+
+/// Flickpitch chat list - WhatsApp-familiar structure, brand-specific details.
+///
+/// Every interaction here is wired to a live endpoint:
+///   pin / unfavourite / favourite / archive / unarchive -> ConversationRepository
+///   delete                                             -> ConversationRepository
+///   new list                                           -> POST /chat-labels
+///   open chat                                          -> NavigationHelper
+/// Nothing on this screen is decorative.
+class FpChatListScreen extends StatefulWidget {
+  const FpChatListScreen({super.key});
+
+  @override
+  State<FpChatListScreen> createState() => _FpChatListScreenState();
+}
+
+class _FpChatListScreenState extends State<FpChatListScreen> {
+  final ScrollController _scroll = ScrollController();
+  final TextEditingController _search = TextEditingController();
+  late final ConversationRepository _repo = ConversationRepository(
+    getIt<ApiClient>(),
+  );
+
+  String _query = '';
+  int _filter = 0; // 0 all, 1 unread, 2 favourite, 3 groups
+  bool _busy = false;
+  bool _searchOpen = false;
+  List<ChatLabelRef> _labels = const [];
+  String? _activeLabelId;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll.addListener(_onScroll);
+    _loadLabels();
+  }
+
+  Future<void> _loadLabels() async {
+    try {
+      final labels = await _repo.listLabels();
+      if (mounted) setState(() => _labels = labels);
+    } catch (_) {
+      // non-fatal: the list still works without labels
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.removeListener(_onScroll);
+    _scroll.dispose();
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final p = context.read<ChatProvider>();
+    if (_scroll.position.pixels >= _scroll.position.maxScrollExtent - 320 &&
+        p.hasChatListMoreData &&
+        !p.isChatListPaginationLoading) {
+      p.loadMoreChatList();
+    }
+  }
+
+  // ---------------------------------------------------------------- helpers
+  static Records? _rec(Chats c) =>
+      (c.records?.isNotEmpty ?? false) ? c.records!.first : null;
+
+  String _nameOf(Chats c) {
+    final r = _rec(c);
+    final isGroup = (r?.chatType ?? '').toLowerCase() == 'group';
+    if (isGroup) return r?.groupName ?? 'Group';
+    final p = c.peerUserData;
+    if (p == null) return 'Unknown';
+    final full = (p.fullName ?? '').trim();
+    if (full.isNotEmpty) return full;
+    final joined = '${p.firstName ?? ''} ${p.lastName ?? ''}'.trim();
+    return joined.isNotEmpty ? joined : (p.userName ?? 'Unknown');
+  }
+
+  List<Chats> _visible(List<Chats> all) {
+    var list = all;
+    if (_filter == 1) {
+      list = list.where((c) => (_rec(c)?.unseenCount ?? 0) > 0).toList();
+    } else if (_filter == 2) {
+      list = list.where((c) => _rec(c)?.isFavorite == true).toList();
+    } else if (_filter == 3) {
+      list = list
+          .where((c) => (_rec(c)?.chatType ?? '').toLowerCase() == 'group')
+          .toList();
+    }
+    if (_activeLabelId != null) {
+      list = list
+          .where(
+            (c) => (_rec(c)?.labelIds ?? const []).contains(_activeLabelId),
+          )
+          .toList();
+    }
+    if (_query.isNotEmpty) {
+      final q = _query.toLowerCase();
+      list = list.where((c) => _nameOf(c).toLowerCase().contains(q)).toList();
+    }
+    return list;
+  }
+
+  Future<void> _run(Future<void> Function() action, {String? done}) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action();
+      if (!mounted) return;
+      await context.read<ChatProvider>().refreshChatList();
+      if (done != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(done), behavior: SnackBarBehavior.floating),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not update: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _togglePin(Chats chat) async {
+    final r = _rec(chat);
+    final id = r?.chatId;
+    if (id == null) return;
+    final pinned = r?.isPinned == true;
+    await _run(
+      () => _repo.setPinned('$id', !pinned),
+      done: pinned ? 'Unpinned' : 'Pinned to top',
+    );
+  }
+
+  Future<void> _toggleFavorite(Chats chat) async {
+    final r = _rec(chat);
+    final id = r?.chatId;
+    if (id == null) return;
+    final fav = r?.isFavorite == true;
+    await _run(
+      () => _repo.setFavorite('$id', !fav),
+      done: fav ? 'Removed from favourites' : 'Added to favourites',
+    );
+  }
+
+  Future<void> _archive(Chats chat) async {
+    final id = _rec(chat)?.chatId;
+    if (id == null) return;
+    await _run(() => _repo.setArchived('$id', true), done: 'Archived');
+  }
+
+  Future<void> _delete(Chats chat) async {
+    final id = _rec(chat)?.chatId;
+    if (id == null) return;
+    final ok = await _confirm(
+      title: 'Delete this chat?',
+      body: 'This clears your copy of the conversation and removes it from your list. Other people keep theirs.',
+      confirm: 'Delete',
+      danger: true,
+    );
+    if (ok != true) return;
+    await _run(() => _repo.deleteConversation('$id'), done: 'Chat deleted');
+  }
+
+  Future<bool?> _confirm({
+    required String title,
+    required String body,
+    required String confirm,
+    bool danger = false,
+  }) {
+    return showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(Fp.s12),
+        padding: const EdgeInsets.all(Fp.s24),
+        decoration: BoxDecoration(
+          color: Fp.inkSoft,
+          borderRadius: BorderRadius.circular(Fp.rLg),
+          border: Border.all(color: Fp.hairlineStrong),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: Fp.h2),
+            const SizedBox(height: Fp.s8),
+            Text(body, style: Fp.body.copyWith(color: Fp.textMuted)),
+            const SizedBox(height: Fp.s24),
+            FpPrimaryButton(
+              label: confirm,
+              onPressed: () => Navigator.pop(ctx, true),
+            ),
+            const SizedBox(height: Fp.s8),
+            Center(
+              child: TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text(
+                  'Cancel',
+                  style: Fp.bodyStrong.copyWith(color: Fp.textMuted),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static Color _hex(String v) {
+    var h = v.replaceAll('#', '').replaceAll('0x', '');
+    if (h.length == 6) h = 'FF$h';
+    final n = int.tryParse(h, radix: 16);
+    return n == null ? Fp.violet : Color(n);
+  }
+
+  /// Assign / unassign this chat to one of the user's lists (chat-labels API).
+  Future<void> _openListPicker(Chats chat) async {
+    final id = _rec(chat)?.chatId;
+    if (id == null) return;
+    final current = _rec(chat)?.labelIds ?? const <String>[];
+
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx2, setSheet) => Container(
+          margin: const EdgeInsets.all(Fp.s12),
+          padding: const EdgeInsets.symmetric(vertical: Fp.s8),
+          decoration: BoxDecoration(
+            color: Fp.inkSoft,
+            borderRadius: BorderRadius.circular(Fp.rLg),
+            border: Border.all(color: Fp.hairlineStrong),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Fp.s16,
+                  Fp.s8,
+                  Fp.s16,
+                  Fp.s8,
+                ),
+                child: Text(
+                  'Add to list',
+                  style: Fp.bodyStrong.copyWith(color: Fp.text),
+                ),
+              ),
+              if (_labels.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.all(Fp.s16),
+                  child: Text(
+                    'No lists yet — create one with the + chip.',
+                    style: Fp.caption.copyWith(color: Fp.textMuted),
+                  ),
+                ),
+              for (final l in _labels)
+                CheckboxListTile(
+                  value: current.contains(l.id),
+                  activeColor: Fp.violet,
+                  dense: true,
+                  title: Text(l.text, style: Fp.body.copyWith(color: Fp.text)),
+                  secondary: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: _hex(l.color),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  onChanged: (on) async {
+                    Navigator.pop(ctx);
+                    if (on == true) {
+                      await _run(
+                        () => _repo.assignLabel(l.id, id),
+                        done: 'Added to “${l.text}”',
+                      );
+                    } else {
+                      await _run(
+                        () => _repo.unassignLabel(l.id, id),
+                        done: 'Removed from “${l.text}”',
+                      );
+                    }
+                    await _loadLabels();
+                  },
+                ),
+              ListTile(
+                dense: true,
+                leading: Icon(Icons.add, color: Fp.violet, size: 20),
+                title: Text(
+                  'New list',
+                  style: Fp.body.copyWith(color: Fp.violet),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _createList();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openLongPress(Chats chat) async {
+    final r = _rec(chat);
+    final name = _nameOf(chat);
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        margin: const EdgeInsets.all(Fp.s12),
+        padding: const EdgeInsets.symmetric(vertical: Fp.s8),
+        decoration: BoxDecoration(
+          color: Fp.inkSoft,
+          borderRadius: BorderRadius.circular(Fp.rLg),
+          border: Border.all(color: Fp.hairlineStrong),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(Fp.s16, Fp.s8, Fp.s16, Fp.s12),
+              child: Text(
+                name,
+                style: Fp.caption.copyWith(color: Fp.textMuted),
+              ),
+            ),
+            FpListRow(
+              title: r?.isPinned == true ? 'Unpin' : 'Pin to top',
+              icon: Icons.push_pin_outlined,
+              onTap: () {
+                Navigator.pop(ctx);
+                _togglePin(chat);
+              },
+            ),
+            FpListRow(
+              title: r?.isFavorite == true
+                  ? 'Remove from favourites'
+                  : 'Add to favourites',
+              icon: Icons.star_outline,
+              iconTint: Fp.amber,
+              onTap: () {
+                Navigator.pop(ctx);
+                _toggleFavorite(chat);
+              },
+            ),
+            FpListRow(
+              title: 'Add to list',
+              icon: Icons.label_outline,
+              iconTint: Fp.violet,
+              onTap: () {
+                Navigator.pop(ctx);
+                _openListPicker(chat);
+              },
+            ),
+            FpListRow(
+              title: 'Archive',
+              icon: Icons.archive_outlined,
+              iconTint: Fp.cyan,
+              onTap: () {
+                Navigator.pop(ctx);
+                _archive(chat);
+              },
+            ),
+            FpListRow(
+              title: 'Delete chat',
+              icon: Icons.delete_outline,
+              iconTint: Fp.coral,
+              divider: false,
+              onTap: () {
+                Navigator.pop(ctx);
+                _delete(chat);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Creates a real chat label via POST /chat-labels.
+  Future<void> _createList() async {
+    final controller = TextEditingController();
+    final created = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: Container(
+          margin: const EdgeInsets.all(Fp.s12),
+          padding: const EdgeInsets.all(Fp.s24),
+          decoration: BoxDecoration(
+            color: Fp.inkSoft,
+            borderRadius: BorderRadius.circular(Fp.rLg),
+            border: Border.all(color: Fp.hairlineStrong),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('New list', style: Fp.h2),
+              const SizedBox(height: Fp.s4),
+              Text(
+                'Group chats into a list you can find quickly.',
+                style: Fp.caption.copyWith(color: Fp.textMuted),
+              ),
+              const SizedBox(height: Fp.s16),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: Fp.s16),
+                decoration: BoxDecoration(
+                  color: Fp.inkRaised,
+                  borderRadius: BorderRadius.circular(Fp.rMd),
+                  border: Border.all(color: Fp.hairlineStrong),
+                ),
+                child: TextField(
+                  controller: controller,
+                  autofocus: true,
+                  style: Fp.body.copyWith(color: Fp.text),
+                  cursorColor: Fp.violet,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 16),
+                    hintText: 'List name',
+                    hintStyle: Fp.body.copyWith(color: Fp.textFaint),
+                  ),
+                ),
+              ),
+              const SizedBox(height: Fp.s24),
+              FpPrimaryButton(
+                label: 'Create list',
+                onPressed: () => Navigator.pop(ctx, true),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    final name = controller.text.trim();
+    if (created != true || name.isEmpty) return;
+
+    await _run(() async {
+      await getIt<ApiClient>().request(
+        '/chat-labels',
+        method: 'POST',
+        body: {'label_text': name, 'label_color': '#7C4DFF'},
+      );
+    }, done: 'List “$name” created');
+    await _loadLabels();
+  }
+
+  // ---------------------------------------------------------------- build
+  @override
+  Widget build(BuildContext context) {
+    // theme dependency: rebuild this screen when the theme changes
+    // so the static Fp tokens are re-read (they are not InheritedWidgets).
+    context.watch<ThemeProvider>();
+    final provider = context.watch<ChatProvider>();
+    final all = provider.chatListData.chats;
+    final visible = _visible(all);
+    final unread = all.where((c) => (_rec(c)?.unseenCount ?? 0) > 0).length;
+    final favourites = all.where((c) => _rec(c)?.isFavorite == true).length;
+    final groups = all
+        .where((c) => (_rec(c)?.chatType ?? '').toLowerCase() == 'group')
+        .length;
+
+    final pinned = visible.where((c) => _rec(c)?.isPinned == true).toList();
+    final rest = visible.where((c) => _rec(c)?.isPinned != true).toList();
+
+    return Scaffold(
+      backgroundColor: Fp.ink,
+      body: FpCanvas(
+        child: RefreshIndicator(
+          color: Fp.violet,
+          backgroundColor: Fp.inkRaised,
+          onRefresh: () => provider.refreshChatList(),
+          child: CustomScrollView(
+            controller: _scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              // header: brand lockup + actions
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(Fp.s16, Fp.s12, Fp.s12, 0),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: _searchOpen
+                            ? Row(
+                                children: [
+                                  Expanded(
+                                    child: Container(
+                                      height: 44,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: Fp.s16,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Fp.inkRaised,
+                                        borderRadius: BorderRadius.circular(
+                                          Fp.rPill,
+                                        ),
+                                        border: Border.all(color: Fp.violet),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            Icons.search,
+                                            size: 18,
+                                            color: Fp.violet,
+                                          ),
+                                          const SizedBox(width: Fp.s8),
+                                          Expanded(
+                                            child: TextField(
+                                              controller: _search,
+                                              autofocus: true,
+                                              onChanged: (v) =>
+                                                  setState(() => _query = v),
+                                              style: Fp.body.copyWith(
+                                                color: Fp.text,
+                                              ),
+                                              cursorColor: Fp.violet,
+                                              decoration: InputDecoration(
+                                                isDense: true,
+                                                border: InputBorder.none,
+                                                hintText: 'Search chats',
+                                                hintStyle: Fp.body.copyWith(
+                                                  color: Fp.textFaint,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                          GestureDetector(
+                                            onTap: () => setState(() {
+                                              _searchOpen = false;
+                                              _query = '';
+                                              _search.clear();
+                                            }),
+                                            child: Icon(
+                                              Icons.close,
+                                              size: 18,
+                                              color: Fp.textMuted,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Image.asset(
+                                        'assets/images/fp_icon.png',
+                                        width: 38,
+                                        height: 38,
+                                        filterQuality: FilterQuality.high,
+                                      ),
+                                      const SizedBox(width: Fp.s12),
+                                      // Flexible: on narrow screens the
+                                      // wordmark ellipsises instead of
+                                      // overflowing under the action icons.
+                                      Flexible(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'FLICKPITCH',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontFamily: 'PoppinsBold',
+                                                fontSize: 15.5,
+                                                letterSpacing: 1.1,
+                                                color: Fp.text,
+                                              ),
+                                            ),
+                                            Text(
+                                              'TALK EASY',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: TextStyle(
+                                                fontFamily: 'PoppinsSemibold',
+                                                fontSize: 8.4,
+                                                letterSpacing: 1.5,
+                                                color: Fp.textMuted,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: Fp.s12),
+                                  Text(
+                                    unread == 0
+                                        ? 'You are all caught up'
+                                        : '$unread ${unread == 1 ? 'chat' : 'chats'} waiting for you',
+                                    style: Fp.caption.copyWith(
+                                      color: Fp.textMuted,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                      if (!_searchOpen) ...[
+                        FpIconTile(
+                          icon: Icons.search,
+                          onTap: () => setState(() => _searchOpen = true),
+                        ),
+                        const SizedBox(width: Fp.s4),
+                        FpIconTile(
+                          icon: Icons.notifications_none_rounded,
+                          onTap: () => Navigator.pushNamed(
+                            context,
+                            AppRoutes.notification,
+                          ),
+                        ),
+                        const SizedBox(width: Fp.s4),
+                        FpIconTile(
+                          icon: Icons.edit_outlined,
+                          // Directory search (name / @username). The compose
+                          // button used to open the device address book, which
+                          // finds nobody on email-only accounts.
+                          onTap: () =>
+                              Navigator.pushNamed(context, AppRoutes.newChat),
+                        ),
+                        const SizedBox(width: Fp.s4),
+                        FpIconTile(
+                          icon: Icons.more_horiz,
+                          onTap: () => _openOverflow(context),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+
+              // stories + frequent shelf
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(Fp.s16, Fp.s16, Fp.s16, 0),
+                  child: _Shelf(
+                    chats: all.take(5).toList(),
+                    nameOf: _nameOf,
+                    onOpen: _open,
+                  ),
+                ),
+              ),
+
+              // filters
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(Fp.s24, Fp.s12, Fp.s24, 0),
+                  child: _Segmented(
+                    index: _filter,
+                    labels: const ['All', 'Unread', 'Favourite', 'Groups'],
+                    counts: [all.length, unread, favourites, groups],
+                    onChanged: (i) => setState(() => _filter = i),
+                    onCreateList: _createList,
+                  ),
+                ),
+              ),
+
+              if (_labels.isNotEmpty)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      Fp.s24,
+                      Fp.s8,
+                      Fp.s24,
+                      0,
+                    ),
+                    child: SizedBox(
+                      height: 32,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        itemCount: _labels.length,
+                        separatorBuilder: (_, _) =>
+                            const SizedBox(width: Fp.s8),
+                        itemBuilder: (context, i) {
+                          final l = _labels[i];
+                          final active = _activeLabelId == l.id;
+                          return GestureDetector(
+                            onTap: () => setState(
+                              () => _activeLabelId = active ? null : l.id,
+                            ),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: Fp.s12,
+                              ),
+                              decoration: BoxDecoration(
+                                color: active
+                                    ? Fp.violet.withValues(alpha: 0.16)
+                                    : Fp.inkRaised,
+                                borderRadius: BorderRadius.circular(Fp.rPill),
+                                border: Border.all(
+                                  color: active ? Fp.violet : Fp.hairline,
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: BoxDecoration(
+                                      color: _hex(l.color),
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    l.text,
+                                    style: Fp.caption.copyWith(
+                                      color: active ? Fp.violet : Fp.textMuted,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+
+              if (provider.isChatListLoading && all.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation(Fp.violet),
+                    ),
+                  ),
+                )
+              else if (visible.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: FpEmptyState(
+                    icon: Icons.forum_outlined,
+                    title: _query.isNotEmpty
+                        ? 'No chat matches “$_query”'
+                        : _filter == 2
+                        ? 'No favourites yet'
+                        : 'No conversations yet',
+                    message: _query.isNotEmpty
+                        ? 'Try a different name.'
+                        : 'Start a conversation and it will show up here.',
+                    action: FpPrimaryButton(
+                      label: 'New message',
+                      icon: Icons.add_comment_outlined,
+                      expand: false,
+                      onPressed: () => Navigator.pushNamed(
+                        context,
+                        AppRoutes.contactListScreen,
+                      ),
+                    ),
+                  ),
+                )
+              else ...[
+                if (pinned.isNotEmpty) ...[
+                  _sectionLabel('Pinned', pinned.length),
+                  _rows(pinned),
+                ],
+                if (rest.isNotEmpty) ...[
+                  _sectionLabel('All chats', rest.length),
+                  _rows(rest),
+                ],
+              ],
+
+              if (provider.isChatListPaginationLoading)
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.only(bottom: 100, top: 16),
+                    child: Center(
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(Fp.violet),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+              const SliverToBoxAdapter(child: SizedBox(height: 110)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionLabel(String text, int count) => SliverToBoxAdapter(
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(Fp.s24, Fp.s16, Fp.s24, Fp.s4),
+      child: Row(
+        children: [
+          Text(
+            text.toUpperCase(),
+            style: Fp.label.copyWith(color: Fp.textFaint),
+          ),
+          const SizedBox(width: Fp.s8),
+          Text('$count', style: Fp.label.copyWith(color: Fp.violet)),
+        ],
+      ),
+    ),
+  );
+
+  Widget _rows(List<Chats> chats) => SliverPadding(
+    padding: const EdgeInsets.symmetric(horizontal: 0),
+    sliver: SliverList.separated(
+      itemCount: chats.length,
+      separatorBuilder: (_, _) => const SizedBox.shrink(),
+      itemBuilder: (context, i) => _ChatRow(
+        chat: chats[i],
+        name: _nameOf(chats[i]),
+        record: _rec(chats[i]),
+        onTap: () => _open(context, chats[i]),
+        onLongPress: () => _openLongPress(chats[i]),
+        onPin: () => _togglePin(chats[i]),
+        onArchive: () => _archive(chats[i]),
+        onDelete: () => _delete(chats[i]),
+      ),
+    ),
+  );
+
+  Future<void> _openOverflow(BuildContext context) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        margin: const EdgeInsets.all(Fp.s12),
+        padding: const EdgeInsets.symmetric(vertical: Fp.s8),
+        decoration: BoxDecoration(
+          color: Fp.inkSoft,
+          borderRadius: BorderRadius.circular(Fp.rLg),
+          border: Border.all(color: Fp.hairlineStrong),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            FpListRow(
+              title: 'New group',
+              icon: Icons.group_add_outlined,
+              onTap: () {
+                Navigator.pop(context);
+                NavigationHelper.navigateToCreateGroup(context);
+              },
+            ),
+            FpListRow(
+              title: 'Archived chats',
+              icon: Icons.archive_outlined,
+              iconTint: Fp.cyan,
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ArchivedChatListScreen(
+                      onChatTap:
+                          (
+                            chatId,
+                            peerUser, {
+                            chatType,
+                            groupName,
+                            groupIcon,
+                            groupDescription,
+                          }) {
+                            final isGroup =
+                                (chatType ?? '').toLowerCase() == 'group';
+                            final full = (peerUser.fullName ?? '').trim();
+                            final name = full.isNotEmpty
+                                ? full
+                                : ((peerUser.userName ?? '').trim().isNotEmpty
+                                      ? peerUser.userName!
+                                      : (groupName ?? 'Chat'));
+                            if (isGroup) {
+                              Navigator.pushNamed(
+                                context,
+                                AppRoutes.universalChat,
+                                arguments: {
+                                  'userId': peerUser.userId ?? 0,
+                                  'chatId': chatId,
+                                  'chatName': groupName ?? name,
+                                  'profilePic': groupIcon ?? '',
+                                  'isGroupChat': true,
+                                  'blockFlag': false,
+                                  'unseenCount': 0,
+                                  'fromArchive': true,
+                                },
+                              );
+                            } else {
+                              NavigationHelper.navigateToIndividualChat(
+                                context,
+                                userId: peerUser.userId ?? 0,
+                                userName: name,
+                                profilePic: peerUser.profilePic ?? '',
+                                chatId: chatId,
+                                fromArchive: true,
+                              );
+                            }
+                          },
+                    ),
+                  ),
+                );
+              },
+            ),
+            FpListRow(
+              title: 'Settings',
+              icon: Icons.settings_outlined,
+              iconTint: Fp.textMuted,
+              divider: false,
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.pushNamed(context, AppRoutes.settingScreen);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _open(BuildContext context, Chats chat) {
+    final r = _rec(chat);
+    final isGroup = (r?.chatType ?? '').toLowerCase() == 'group';
+    final name = _nameOf(chat);
+    final pic = isGroup
+        ? (r?.groupIcon ?? '')
+        : (chat.peerUserData?.profilePic ?? '');
+    final userId = chat.peerUserData?.userId ?? 0;
+    final unseen = r?.unseenCount ?? 0;
+    final chatId = r?.chatId ?? 0;
+
+    if (!isGroup && userId > 0) {
+      NavigationHelper.navigateToIndividualChat(
+        context,
+        userId: userId,
+        userName: name,
+        profilePic: pic,
+        chatId: chatId,
+        unseenCount: unseen,
+      );
+      return;
+    }
+
+    Navigator.pushNamed(
+      context,
+      AppRoutes.universalChat,
+      arguments: {
+        'userId': userId,
+        'chatId': chatId,
+        'chatName': name,
+        'profilePic': pic,
+        'isGroupChat': isGroup,
+        'blockFlag': false,
+        'unseenCount': unseen,
+        'fromArchive': false,
+      },
+    );
+  }
+}
+
+// ------------------------------------------------------------------ shelf
+class _Shelf extends StatelessWidget {
+  const _Shelf({
+    required this.chats,
+    required this.nameOf,
+    required this.onOpen,
+  });
+
+  final List<Chats> chats;
+  final String Function(Chats) nameOf;
+  final void Function(BuildContext, Chats) onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(Fp.s16, Fp.s12, Fp.s16, Fp.s16),
+      decoration: BoxDecoration(
+        color: Fp.inkSoft,
+        borderRadius: BorderRadius.circular(Fp.rLg),
+        border: Border.all(color: Fp.hairline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('STORIES', style: Fp.label.copyWith(color: Fp.textFaint)),
+              const Spacer(),
+              Text('Frequent', style: Fp.label.copyWith(color: Fp.violet)),
+            ],
+          ),
+          const SizedBox(height: Fp.s12),
+          SizedBox(
+            height: 78,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: chats.length + 1,
+              separatorBuilder: (_, _) => const SizedBox(width: Fp.s16),
+              itemBuilder: (context, i) {
+                if (i == 0) {
+                  return GestureDetector(
+                    onTap: () => Navigator.pushNamed(
+                      context,
+                      AppRoutes.contactListScreen,
+                    ),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 52,
+                          height: 52,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: Fp.violet, width: 1.5),
+                          ),
+                          child: Icon(Icons.add, color: Fp.violet),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'New',
+                          style: Fp.caption.copyWith(color: Fp.textMuted),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+                final chat = chats[i - 1];
+                final r = (chat.records?.isNotEmpty ?? false)
+                    ? chat.records!.first
+                    : null;
+                final unseen = (r?.unseenCount ?? 0) > 0;
+                final name = nameOf(chat);
+                return GestureDetector(
+                  onTap: () => onOpen(context, chat),
+                  child: Column(
+                    children: [
+                      FpAvatar(
+                        imageUrl: (r?.chatType ?? '').toLowerCase() == 'group'
+                            ? r?.groupIcon
+                            : chat.peerUserData?.profilePic,
+                        label: name,
+                        size: 52,
+                        ring: unseen ? Fp.violet : Fp.textFaint,
+                      ),
+                      const SizedBox(height: 6),
+                      SizedBox(
+                        width: 62,
+                        child: Text(
+                          name.split(' ').first,
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Fp.caption.copyWith(
+                            color: unseen ? Fp.text : Fp.textMuted,
+                            fontWeight: unseen
+                                ? FontWeight.w700
+                                : FontWeight.w400,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ------------------------------------------------------------------ row
+class _ChatRow extends StatelessWidget {
+  const _ChatRow({
+    required this.chat,
+    required this.name,
+    required this.record,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onPin,
+    required this.onArchive,
+    required this.onDelete,
+  });
+
+  final Chats chat;
+  final String name;
+  final Records? record;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
+  final VoidCallback onPin;
+  final VoidCallback onArchive;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final isGroup = (record?.chatType ?? '').toLowerCase() == 'group';
+    final unseen = record?.unseenCount ?? 0;
+    final pinned = record?.isPinned == true;
+
+    return Dismissible(
+      key: ValueKey('chat-${record?.chatId}'),
+      background: _actionBg(
+        color: Fp.cyan,
+        icon: Icons.archive_outlined,
+        label: 'Archive',
+        alignment: Alignment.centerLeft,
+      ),
+      secondaryBackground: _actionBg(
+        color: Fp.coral,
+        icon: Icons.delete_outline,
+        label: 'Delete',
+        alignment: Alignment.centerRight,
+      ),
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.endToStart) {
+          onDelete();
+          return false; // list refreshes from the server after the call
+        }
+        onArchive();
+        return false;
+      },
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: Container(
+          color: Fp.ink,
+          padding: const EdgeInsets.symmetric(horizontal: Fp.s16, vertical: 10),
+          child: Row(
+            children: [
+              FpAvatar(
+                imageUrl: isGroup
+                    ? record?.groupIcon
+                    : chat.peerUserData?.profilePic,
+                label: name,
+                size: 50,
+                ring: unseen > 0 ? Fp.violet : null,
+              ),
+              const SizedBox(width: Fp.s16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        if (isGroup) ...[
+                          Icon(
+                            Icons.groups_2_outlined,
+                            size: 14,
+                            color: Fp.cyan,
+                          ),
+                          const SizedBox(width: 5),
+                        ],
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Fp.bodyStrong,
+                          ),
+                        ),
+                        Text(
+                          _shortTime(record?.updatedAt ?? record?.createdAt),
+                          style: Fp.caption.copyWith(
+                            color: unseen > 0 ? Fp.violet : Fp.textMuted,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 10.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _preview(record),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Fp.caption.copyWith(
+                              color: unseen > 0 ? Fp.text : Fp.textMuted,
+                              fontWeight: unseen > 0
+                                  ? FontWeight.w600
+                                  : FontWeight.w400,
+                            ),
+                          ),
+                        ),
+                        if (unseen > 0) ...[
+                          const SizedBox(width: 8),
+                          FpDot(count: unseen),
+                        ],
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: onPin,
+                          behavior: HitTestBehavior.opaque,
+                          child: Padding(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(
+                              Icons.push_pin,
+                              size: 15,
+                              color: pinned ? Fp.violet : Fp.textFaint,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _actionBg({
+    required Color color,
+    required IconData icon,
+    required String label,
+    required Alignment alignment,
+  }) {
+    return Container(
+      color: color,
+      alignment: alignment,
+      padding: const EdgeInsets.symmetric(horizontal: Fp.s24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, color: Colors.white, size: 20),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _preview(Records? r) {
+    final msgs = r?.messages;
+    if (msgs == null || msgs.isEmpty) return 'No messages yet';
+    final m = msgs.last;
+    final type = (m.messageType ?? '').toLowerCase();
+    return switch (type) {
+      'image' || 'photo' => '📷 Photo',
+      'video' => '🎥 Video',
+      'audio' || 'voice' => '🎙️ Voice note',
+      'file' || 'document' => '📎 Attachment',
+      _ =>
+        (m.messageContent ?? '').trim().isEmpty
+            ? 'Message'
+            : m.messageContent!.trim(),
+    };
+  }
+
+  static String _shortTime(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '';
+    final now = DateTime.now();
+    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+      final h24 = dt.hour;
+      final h12 = h24 % 12 == 0 ? 12 : h24 % 12;
+      return '$h12:${dt.minute.toString().padLeft(2, '0')}'
+          '${h24 < 12 ? 'am' : 'pm'}';
+    }
+    final y = now.subtract(const Duration(days: 1));
+    if (dt.year == y.year && dt.month == y.month && dt.day == y.day) {
+      return 'Yesterday';
+    }
+    return '${dt.day}/${dt.month}';
+  }
+}
+
+// ------------------------------------------------------------------ filters
+class _Segmented extends StatelessWidget {
+  const _Segmented({
+    required this.index,
+    required this.labels,
+    required this.counts,
+    required this.onChanged,
+    required this.onCreateList,
+  });
+
+  final int index;
+  final List<String> labels;
+  final List<int> counts;
+  final ValueChanged<int> onChanged;
+  final VoidCallback onCreateList;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 38,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        children: [
+          for (var i = 0; i < labels.length; i++) ...[
+            GestureDetector(
+              onTap: () => onChanged(i),
+              child: AnimatedContainer(
+                duration: Fp.fast,
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: Fp.s16),
+                margin: const EdgeInsets.only(right: Fp.s8),
+                decoration: BoxDecoration(
+                  color: i == index ? Fp.violet : Fp.inkRaised,
+                  borderRadius: BorderRadius.circular(Fp.rPill),
+                  border: Border.all(
+                    color: i == index ? Fp.violet : Fp.hairline,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Text(
+                      labels[i],
+                      style: Fp.caption.copyWith(
+                        color: i == index ? Colors.white : Fp.textMuted,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    if (counts[i] > 0) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        '${counts[i]}',
+                        style: Fp.caption.copyWith(
+                          fontSize: 10.5,
+                          color: i == index
+                              ? Colors.white.withValues(alpha: 0.85)
+                              : Fp.textFaint,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
+          GestureDetector(
+            onTap: onCreateList,
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: Fp.inkRaised,
+                shape: BoxShape.circle,
+                border: Border.all(color: Fp.hairline),
+              ),
+              child: Icon(Icons.add, size: 19, color: Fp.violet),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

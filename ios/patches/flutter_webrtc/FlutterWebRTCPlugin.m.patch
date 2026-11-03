@@ -1,0 +1,63 @@
+Reference only — the machine-applied version lives in
+ios/patches/apply_flutter_webrtc_patch.sh (idempotent, run from the Podfile
+pre_install hook). Anchors below are for flutter_webrtc 0.12.12+hotfix.1.
+
+=============================================================================
+Classes/FlutterWebRTCPlugin.h
+=============================================================================
+@@ postEvent forward declaration @@
+-void postEvent(FlutterEventSink _Nonnull sink, id _Nullable event);
++void postEvent(FlutterEventSink _Nullable sink, id _Nullable event);
+
+=============================================================================
+Classes/FlutterWebRTCPlugin.m
+=============================================================================
+@@ free function, just below @implementation VideoEncoderFactorySimulcast @@
+-void postEvent(FlutterEventSink _Nonnull sink, id _Nullable event) {
+-    dispatch_async(dispatch_get_main_queue(), ^{
+-      sink(event);
+-    });
+-}
++// --- whoxa patch: guard against EXC_BAD_ACCESS in postEvent -------------------
++// WebRTC delegate callbacks arrive on background threads and are hopped to the
++// main thread here. If the FlutterEngine / binary messenger is torn down in the
++// meantime (logout, call teardown, app termination) the captured FlutterEventSink
++// points at freed memory and invoking it segfaults. Track engine attachment and
++// re-check it (plus a nil check) on the main thread before firing.
++static volatile BOOL _whoxaFlutterWebRTCPluginAttached = NO;
++
++static BOOL whoxaFlutterWebRTCPluginIsAttached(void) {
++  return _whoxaFlutterWebRTCPluginAttached;
++}
++
++void postEvent(FlutterEventSink _Nullable sink, id _Nullable event) {
++  if (sink == nil) {
++    return;
++  }
++  FlutterEventSink strongSink = sink;
++  dispatch_async(dispatch_get_main_queue(), ^{
++    if (!whoxaFlutterWebRTCPluginIsAttached() || strongSink == nil) {
++      return;
++    }
++    strongSink(event);
++  });
++}
++// --- end whoxa patch --------------------------------------------------------
+
+@@ - (instancetype)initWithChannel:... @@
+   self = [super init];
+   sharedSingleton = self;
++  _whoxaFlutterWebRTCPluginAttached = YES;  // whoxa patch
+
+@@ - (void)detachFromEngineForRegistrar: @@
+     peerConnection.eventSink = nil;
+   }
+   _eventSink = nil;
++  _whoxaFlutterWebRTCPluginAttached = NO;  // whoxa patch
+ }
+
+@@ - (void)dealloc @@
+   [_peerConnections removeAllObjects];
+   _peerConnectionFactory = nil;
++  _whoxaFlutterWebRTCPluginAttached = NO;  // whoxa patch
+ }

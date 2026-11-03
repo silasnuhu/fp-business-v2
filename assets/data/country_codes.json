@@ -1,0 +1,1403 @@
+{
+    "country_codes": {
+        "1": {
+            "countries": [
+                "US",
+                "CA"
+            ],
+            "name": "United States, Canada"
+        },
+        "7": {
+            "countries": [
+                "RU",
+                "KZ"
+            ],
+            "name": "Russia, Kazakhstan"
+        },
+        "20": {
+            "countries": [
+                "EG"
+            ],
+            "name": "Egypt"
+        },
+        "27": {
+            "countries": [
+                "ZA"
+            ],
+            "name": "South Africa"
+        },
+        "30": {
+            "countries": [
+                "GR"
+            ],
+            "name": "Greece"
+        },
+        "31": {
+            "countries": [
+                "NL"
+            ],
+            "name": "Netherlands"
+        },
+        "32": {
+            "countries": [
+                "BE"
+            ],
+            "name": "Belgium"
+        },
+        "33": {
+            "countries": [
+                "FR"
+            ],
+            "name": "France"
+        },
+        "34": {
+            "countries": [
+                "ES"
+            ],
+            "name": "Spain"
+        },
+        "36": {
+            "countries": [
+                "HU"
+            ],
+            "name": "Hungary"
+        },
+        "39": {
+            "countries": [
+                "IT",
+                "VA"
+            ],
+            "name": "Italy, Vatican City"
+        },
+        "40": {
+            "countries": [
+                "RO"
+            ],
+            "name": "Romania"
+        },
+        "41": {
+            "countries": [
+                "CH"
+            ],
+            "name": "Switzerland"
+        },
+        "43": {
+            "countries": [
+                "AT"
+            ],
+            "name": "Austria"
+        },
+        "44": {
+            "countries": [
+                "GB"
+            ],
+            "name": "United Kingdom"
+        },
+        "45": {
+            "countries": [
+                "DK"
+            ],
+            "name": "Denmark"
+        },
+        "46": {
+            "countries": [
+                "SE"
+            ],
+            "name": "Sweden"
+        },
+        "47": {
+            "countries": [
+                "NO",
+                "SJ"
+            ],
+            "name": "Norway, Svalbard"
+        },
+        "48": {
+            "countries": [
+                "PL"
+            ],
+            "name": "Poland"
+        },
+        "49": {
+            "countries": [
+                "DE"
+            ],
+            "name": "Germany"
+        },
+        "51": {
+            "countries": [
+                "PE"
+            ],
+            "name": "Peru"
+        },
+        "52": {
+            "countries": [
+                "MX"
+            ],
+            "name": "Mexico"
+        },
+        "53": {
+            "countries": [
+                "CU"
+            ],
+            "name": "Cuba"
+        },
+        "54": {
+            "countries": [
+                "AR"
+            ],
+            "name": "Argentina"
+        },
+        "55": {
+            "countries": [
+                "BR"
+            ],
+            "name": "Brazil"
+        },
+        "56": {
+            "countries": [
+                "CL"
+            ],
+            "name": "Chile"
+        },
+        "57": {
+            "countries": [
+                "CO"
+            ],
+            "name": "Colombia"
+        },
+        "58": {
+            "countries": [
+                "VE"
+            ],
+            "name": "Venezuela"
+        },
+        "60": {
+            "countries": [
+                "MY"
+            ],
+            "name": "Malaysia"
+        },
+        "61": {
+            "countries": [
+                "AU",
+                "CX",
+                "CC"
+            ],
+            "name": "Australia, Christmas Island, Cocos Islands"
+        },
+        "62": {
+            "countries": [
+                "ID"
+            ],
+            "name": "Indonesia"
+        },
+        "63": {
+            "countries": [
+                "PH"
+            ],
+            "name": "Philippines"
+        },
+        "64": {
+            "countries": [
+                "NZ"
+            ],
+            "name": "New Zealand"
+        },
+        "65": {
+            "countries": [
+                "SG"
+            ],
+            "name": "Singapore"
+        },
+        "66": {
+            "countries": [
+                "TH"
+            ],
+            "name": "Thailand"
+        },
+        "81": {
+            "countries": [
+                "JP"
+            ],
+            "name": "Japan"
+        },
+        "82": {
+            "countries": [
+                "KR"
+            ],
+            "name": "South Korea"
+        },
+        "84": {
+            "countries": [
+                "VN"
+            ],
+            "name": "Vietnam"
+        },
+        "86": {
+            "countries": [
+                "CN"
+            ],
+            "name": "China"
+        },
+        "90": {
+            "countries": [
+                "TR"
+            ],
+            "name": "Turkey"
+        },
+        "91": {
+            "countries": [
+                "IN"
+            ],
+            "name": "India"
+        },
+        "92": {
+            "countries": [
+                "PK"
+            ],
+            "name": "Pakistan"
+        },
+        "93": {
+            "countries": [
+                "AF"
+            ],
+            "name": "Afghanistan"
+        },
+        "94": {
+            "countries": [
+                "LK"
+            ],
+            "name": "Sri Lanka"
+        },
+        "95": {
+            "countries": [
+                "MM"
+            ],
+            "name": "Myanmar"
+        },
+        "98": {
+            "countries": [
+                "IR"
+            ],
+            "name": "Iran"
+        },
+        "212": {
+            "countries": [
+                "MA",
+                "EH"
+            ],
+            "name": "Morocco, Western Sahara"
+        },
+        "213": {
+            "countries": [
+                "DZ"
+            ],
+            "name": "Algeria"
+        },
+        "216": {
+            "countries": [
+                "TN"
+            ],
+            "name": "Tunisia"
+        },
+        "218": {
+            "countries": [
+                "LY"
+            ],
+            "name": "Libya"
+        },
+        "220": {
+            "countries": [
+                "GM"
+            ],
+            "name": "Gambia"
+        },
+        "221": {
+            "countries": [
+                "SN"
+            ],
+            "name": "Senegal"
+        },
+        "222": {
+            "countries": [
+                "MR"
+            ],
+            "name": "Mauritania"
+        },
+        "223": {
+            "countries": [
+                "ML"
+            ],
+            "name": "Mali"
+        },
+        "224": {
+            "countries": [
+                "GN"
+            ],
+            "name": "Guinea"
+        },
+        "225": {
+            "countries": [
+                "CI"
+            ],
+            "name": "Ivory Coast"
+        },
+        "226": {
+            "countries": [
+                "BF"
+            ],
+            "name": "Burkina Faso"
+        },
+        "227": {
+            "countries": [
+                "NE"
+            ],
+            "name": "Niger"
+        },
+        "228": {
+            "countries": [
+                "TG"
+            ],
+            "name": "Togo"
+        },
+        "229": {
+            "countries": [
+                "BJ"
+            ],
+            "name": "Benin"
+        },
+        "230": {
+            "countries": [
+                "MU"
+            ],
+            "name": "Mauritius"
+        },
+        "231": {
+            "countries": [
+                "LR"
+            ],
+            "name": "Liberia"
+        },
+        "232": {
+            "countries": [
+                "SL"
+            ],
+            "name": "Sierra Leone"
+        },
+        "233": {
+            "countries": [
+                "GH"
+            ],
+            "name": "Ghana"
+        },
+        "234": {
+            "countries": [
+                "NG"
+            ],
+            "name": "Nigeria"
+        },
+        "235": {
+            "countries": [
+                "TD"
+            ],
+            "name": "Chad"
+        },
+        "236": {
+            "countries": [
+                "CF"
+            ],
+            "name": "Central African Republic"
+        },
+        "237": {
+            "countries": [
+                "CM"
+            ],
+            "name": "Cameroon"
+        },
+        "238": {
+            "countries": [
+                "CV"
+            ],
+            "name": "Cape Verde"
+        },
+        "239": {
+            "countries": [
+                "ST"
+            ],
+            "name": "São Tomé and Príncipe"
+        },
+        "240": {
+            "countries": [
+                "GQ"
+            ],
+            "name": "Equatorial Guinea"
+        },
+        "241": {
+            "countries": [
+                "GA"
+            ],
+            "name": "Gabon"
+        },
+        "242": {
+            "countries": [
+                "CG"
+            ],
+            "name": "Republic of the Congo"
+        },
+        "243": {
+            "countries": [
+                "CD"
+            ],
+            "name": "Democratic Republic of the Congo"
+        },
+        "244": {
+            "countries": [
+                "AO"
+            ],
+            "name": "Angola"
+        },
+        "245": {
+            "countries": [
+                "GW"
+            ],
+            "name": "Guinea-Bissau"
+        },
+        "246": {
+            "countries": [
+                "IO"
+            ],
+            "name": "British Indian Ocean Territory"
+        },
+        "247": {
+            "countries": [
+                "AC"
+            ],
+            "name": "Ascension Island"
+        },
+        "248": {
+            "countries": [
+                "SC"
+            ],
+            "name": "Seychelles"
+        },
+        "249": {
+            "countries": [
+                "SD"
+            ],
+            "name": "Sudan"
+        },
+        "250": {
+            "countries": [
+                "RW"
+            ],
+            "name": "Rwanda"
+        },
+        "251": {
+            "countries": [
+                "ET"
+            ],
+            "name": "Ethiopia"
+        },
+        "252": {
+            "countries": [
+                "SO"
+            ],
+            "name": "Somalia"
+        },
+        "253": {
+            "countries": [
+                "DJ"
+            ],
+            "name": "Djibouti"
+        },
+        "254": {
+            "countries": [
+                "KE"
+            ],
+            "name": "Kenya"
+        },
+        "255": {
+            "countries": [
+                "TZ"
+            ],
+            "name": "Tanzania"
+        },
+        "256": {
+            "countries": [
+                "UG"
+            ],
+            "name": "Uganda"
+        },
+        "257": {
+            "countries": [
+                "BI"
+            ],
+            "name": "Burundi"
+        },
+        "258": {
+            "countries": [
+                "MZ"
+            ],
+            "name": "Mozambique"
+        },
+        "260": {
+            "countries": [
+                "ZM"
+            ],
+            "name": "Zambia"
+        },
+        "261": {
+            "countries": [
+                "MG"
+            ],
+            "name": "Madagascar"
+        },
+        "262": {
+            "countries": [
+                "RE",
+                "YT"
+            ],
+            "name": "Réunion, Mayotte"
+        },
+        "263": {
+            "countries": [
+                "ZW"
+            ],
+            "name": "Zimbabwe"
+        },
+        "264": {
+            "countries": [
+                "NA"
+            ],
+            "name": "Namibia"
+        },
+        "265": {
+            "countries": [
+                "MW"
+            ],
+            "name": "Malawi"
+        },
+        "266": {
+            "countries": [
+                "LS"
+            ],
+            "name": "Lesotho"
+        },
+        "267": {
+            "countries": [
+                "BW"
+            ],
+            "name": "Botswana"
+        },
+        "268": {
+            "countries": [
+                "SZ"
+            ],
+            "name": "Eswatini"
+        },
+        "269": {
+            "countries": [
+                "KM"
+            ],
+            "name": "Comoros"
+        },
+        "290": {
+            "countries": [
+                "SH",
+                "TA"
+            ],
+            "name": "Saint Helena, Tristan da Cunha"
+        },
+        "291": {
+            "countries": [
+                "ER"
+            ],
+            "name": "Eritrea"
+        },
+        "297": {
+            "countries": [
+                "AW"
+            ],
+            "name": "Aruba"
+        },
+        "298": {
+            "countries": [
+                "FO"
+            ],
+            "name": "Faroe Islands"
+        },
+        "299": {
+            "countries": [
+                "GL"
+            ],
+            "name": "Greenland"
+        },
+        "350": {
+            "countries": [
+                "GI"
+            ],
+            "name": "Gibraltar"
+        },
+        "351": {
+            "countries": [
+                "PT"
+            ],
+            "name": "Portugal"
+        },
+        "352": {
+            "countries": [
+                "LU"
+            ],
+            "name": "Luxembourg"
+        },
+        "353": {
+            "countries": [
+                "IE"
+            ],
+            "name": "Ireland"
+        },
+        "354": {
+            "countries": [
+                "IS"
+            ],
+            "name": "Iceland"
+        },
+        "355": {
+            "countries": [
+                "AL"
+            ],
+            "name": "Albania"
+        },
+        "356": {
+            "countries": [
+                "MT"
+            ],
+            "name": "Malta"
+        },
+        "357": {
+            "countries": [
+                "CY"
+            ],
+            "name": "Cyprus"
+        },
+        "358": {
+            "countries": [
+                "FI",
+                "AX"
+            ],
+            "name": "Finland, Åland Islands"
+        },
+        "359": {
+            "countries": [
+                "BG"
+            ],
+            "name": "Bulgaria"
+        },
+        "370": {
+            "countries": [
+                "LT"
+            ],
+            "name": "Lithuania"
+        },
+        "371": {
+            "countries": [
+                "LV"
+            ],
+            "name": "Latvia"
+        },
+        "372": {
+            "countries": [
+                "EE"
+            ],
+            "name": "Estonia"
+        },
+        "373": {
+            "countries": [
+                "MD"
+            ],
+            "name": "Moldova"
+        },
+        "374": {
+            "countries": [
+                "AM"
+            ],
+            "name": "Armenia"
+        },
+        "375": {
+            "countries": [
+                "BY"
+            ],
+            "name": "Belarus"
+        },
+        "376": {
+            "countries": [
+                "AD"
+            ],
+            "name": "Andorra"
+        },
+        "377": {
+            "countries": [
+                "MC"
+            ],
+            "name": "Monaco"
+        },
+        "378": {
+            "countries": [
+                "SM"
+            ],
+            "name": "San Marino"
+        },
+        "380": {
+            "countries": [
+                "UA"
+            ],
+            "name": "Ukraine"
+        },
+        "381": {
+            "countries": [
+                "RS"
+            ],
+            "name": "Serbia"
+        },
+        "382": {
+            "countries": [
+                "ME"
+            ],
+            "name": "Montenegro"
+        },
+        "383": {
+            "countries": [
+                "XK"
+            ],
+            "name": "Kosovo"
+        },
+        "385": {
+            "countries": [
+                "HR"
+            ],
+            "name": "Croatia"
+        },
+        "386": {
+            "countries": [
+                "SI"
+            ],
+            "name": "Slovenia"
+        },
+        "387": {
+            "countries": [
+                "BA"
+            ],
+            "name": "Bosnia and Herzegovina"
+        },
+        "389": {
+            "countries": [
+                "MK"
+            ],
+            "name": "North Macedonia"
+        },
+        "420": {
+            "countries": [
+                "CZ"
+            ],
+            "name": "Czech Republic"
+        },
+        "421": {
+            "countries": [
+                "SK"
+            ],
+            "name": "Slovakia"
+        },
+        "423": {
+            "countries": [
+                "LI"
+            ],
+            "name": "Liechtenstein"
+        },
+        "500": {
+            "countries": [
+                "FK"
+            ],
+            "name": "Falkland Islands"
+        },
+        "501": {
+            "countries": [
+                "BZ"
+            ],
+            "name": "Belize"
+        },
+        "502": {
+            "countries": [
+                "GT"
+            ],
+            "name": "Guatemala"
+        },
+        "503": {
+            "countries": [
+                "SV"
+            ],
+            "name": "El Salvador"
+        },
+        "504": {
+            "countries": [
+                "HN"
+            ],
+            "name": "Honduras"
+        },
+        "505": {
+            "countries": [
+                "NI"
+            ],
+            "name": "Nicaragua"
+        },
+        "506": {
+            "countries": [
+                "CR"
+            ],
+            "name": "Costa Rica"
+        },
+        "507": {
+            "countries": [
+                "PA"
+            ],
+            "name": "Panama"
+        },
+        "508": {
+            "countries": [
+                "PM"
+            ],
+            "name": "Saint Pierre and Miquelon"
+        },
+        "509": {
+            "countries": [
+                "HT"
+            ],
+            "name": "Haiti"
+        },
+        "590": {
+            "countries": [
+                "GP",
+                "BL",
+                "MF"
+            ],
+            "name": "Guadeloupe, Saint Barthélemy, Saint Martin"
+        },
+        "591": {
+            "countries": [
+                "BO"
+            ],
+            "name": "Bolivia"
+        },
+        "592": {
+            "countries": [
+                "GY"
+            ],
+            "name": "Guyana"
+        },
+        "593": {
+            "countries": [
+                "EC"
+            ],
+            "name": "Ecuador"
+        },
+        "594": {
+            "countries": [
+                "GF"
+            ],
+            "name": "French Guiana"
+        },
+        "595": {
+            "countries": [
+                "PY"
+            ],
+            "name": "Paraguay"
+        },
+        "596": {
+            "countries": [
+                "MQ"
+            ],
+            "name": "Martinique"
+        },
+        "597": {
+            "countries": [
+                "SR"
+            ],
+            "name": "Suriname"
+        },
+        "598": {
+            "countries": [
+                "UY"
+            ],
+            "name": "Uruguay"
+        },
+        "599": {
+            "countries": [
+                "CW",
+                "BQ"
+            ],
+            "name": "Curaçao, Bonaire"
+        },
+        "670": {
+            "countries": [
+                "TL"
+            ],
+            "name": "East Timor"
+        },
+        "672": {
+            "countries": [
+                "NF"
+            ],
+            "name": "Norfolk Island"
+        },
+        "673": {
+            "countries": [
+                "BN"
+            ],
+            "name": "Brunei"
+        },
+        "674": {
+            "countries": [
+                "NR"
+            ],
+            "name": "Nauru"
+        },
+        "675": {
+            "countries": [
+                "PG"
+            ],
+            "name": "Papua New Guinea"
+        },
+        "676": {
+            "countries": [
+                "TO"
+            ],
+            "name": "Tonga"
+        },
+        "677": {
+            "countries": [
+                "SB"
+            ],
+            "name": "Solomon Islands"
+        },
+        "678": {
+            "countries": [
+                "VU"
+            ],
+            "name": "Vanuatu"
+        },
+        "679": {
+            "countries": [
+                "FJ"
+            ],
+            "name": "Fiji"
+        },
+        "680": {
+            "countries": [
+                "PW"
+            ],
+            "name": "Palau"
+        },
+        "681": {
+            "countries": [
+                "WF"
+            ],
+            "name": "Wallis and Futuna"
+        },
+        "682": {
+            "countries": [
+                "CK"
+            ],
+            "name": "Cook Islands"
+        },
+        "683": {
+            "countries": [
+                "NU"
+            ],
+            "name": "Niue"
+        },
+        "684": {
+            "countries": [
+                "AS"
+            ],
+            "name": "American Samoa"
+        },
+        "685": {
+            "countries": [
+                "WS"
+            ],
+            "name": "Samoa"
+        },
+        "686": {
+            "countries": [
+                "KI"
+            ],
+            "name": "Kiribati"
+        },
+        "687": {
+            "countries": [
+                "NC"
+            ],
+            "name": "New Caledonia"
+        },
+        "688": {
+            "countries": [
+                "TV"
+            ],
+            "name": "Tuvalu"
+        },
+        "689": {
+            "countries": [
+                "PF"
+            ],
+            "name": "French Polynesia"
+        },
+        "690": {
+            "countries": [
+                "TK"
+            ],
+            "name": "Tokelau"
+        },
+        "691": {
+            "countries": [
+                "FM"
+            ],
+            "name": "Micronesia"
+        },
+        "692": {
+            "countries": [
+                "MH"
+            ],
+            "name": "Marshall Islands"
+        },
+        "850": {
+            "countries": [
+                "KP"
+            ],
+            "name": "North Korea"
+        },
+        "852": {
+            "countries": [
+                "HK"
+            ],
+            "name": "Hong Kong"
+        },
+        "853": {
+            "countries": [
+                "MO"
+            ],
+            "name": "Macau"
+        },
+        "855": {
+            "countries": [
+                "KH"
+            ],
+            "name": "Cambodia"
+        },
+        "856": {
+            "countries": [
+                "LA"
+            ],
+            "name": "Laos"
+        },
+        "880": {
+            "countries": [
+                "BD"
+            ],
+            "name": "Bangladesh"
+        },
+        "886": {
+            "countries": [
+                "TW"
+            ],
+            "name": "Taiwan"
+        },
+        "960": {
+            "countries": [
+                "MV"
+            ],
+            "name": "Maldives"
+        },
+        "961": {
+            "countries": [
+                "LB"
+            ],
+            "name": "Lebanon"
+        },
+        "962": {
+            "countries": [
+                "JO"
+            ],
+            "name": "Jordan"
+        },
+        "963": {
+            "countries": [
+                "SY"
+            ],
+            "name": "Syria"
+        },
+        "964": {
+            "countries": [
+                "IQ"
+            ],
+            "name": "Iraq"
+        },
+        "965": {
+            "countries": [
+                "KW"
+            ],
+            "name": "Kuwait"
+        },
+        "966": {
+            "countries": [
+                "SA"
+            ],
+            "name": "Saudi Arabia"
+        },
+        "967": {
+            "countries": [
+                "YE"
+            ],
+            "name": "Yemen"
+        },
+        "968": {
+            "countries": [
+                "OM"
+            ],
+            "name": "Oman"
+        },
+        "970": {
+            "countries": [
+                "PS"
+            ],
+            "name": "Palestine"
+        },
+        "971": {
+            "countries": [
+                "AE"
+            ],
+            "name": "United Arab Emirates"
+        },
+        "972": {
+            "countries": [
+                "IL"
+            ],
+            "name": "Israel"
+        },
+        "973": {
+            "countries": [
+                "BH"
+            ],
+            "name": "Bahrain"
+        },
+        "974": {
+            "countries": [
+                "QA"
+            ],
+            "name": "Qatar"
+        },
+        "975": {
+            "countries": [
+                "BT"
+            ],
+            "name": "Bhutan"
+        },
+        "976": {
+            "countries": [
+                "MN"
+            ],
+            "name": "Mongolia"
+        },
+        "977": {
+            "countries": [
+                "NP"
+            ],
+            "name": "Nepal"
+        },
+        "992": {
+            "countries": [
+                "TJ"
+            ],
+            "name": "Tajikistan"
+        },
+        "993": {
+            "countries": [
+                "TM"
+            ],
+            "name": "Turkmenistan"
+        },
+        "994": {
+            "countries": [
+                "AZ"
+            ],
+            "name": "Azerbaijan"
+        },
+        "995": {
+            "countries": [
+                "GE"
+            ],
+            "name": "Georgia"
+        },
+        "996": {
+            "countries": [
+                "KG"
+            ],
+            "name": "Kyrgyzstan"
+        },
+        "998": {
+            "countries": [
+                "UZ"
+            ],
+            "name": "Uzbekistan"
+        },
+        "1242": {
+            "countries": [
+                "BS"
+            ],
+            "name": "Bahamas"
+        },
+        "1246": {
+            "countries": [
+                "BB"
+            ],
+            "name": "Barbados"
+        },
+        "1264": {
+            "countries": [
+                "AI"
+            ],
+            "name": "Anguilla"
+        },
+        "1268": {
+            "countries": [
+                "AG"
+            ],
+            "name": "Antigua and Barbuda"
+        },
+        "1284": {
+            "countries": [
+                "VG"
+            ],
+            "name": "British Virgin Islands"
+        },
+        "1340": {
+            "countries": [
+                "VI"
+            ],
+            "name": "U.S. Virgin Islands"
+        },
+        "1345": {
+            "countries": [
+                "KY"
+            ],
+            "name": "Cayman Islands"
+        },
+        "1441": {
+            "countries": [
+                "BM"
+            ],
+            "name": "Bermuda"
+        },
+        "1473": {
+            "countries": [
+                "GD"
+            ],
+            "name": "Grenada"
+        },
+        "1649": {
+            "countries": [
+                "TC"
+            ],
+            "name": "Turks and Caicos"
+        },
+        "1664": {
+            "countries": [
+                "MS"
+            ],
+            "name": "Montserrat"
+        },
+        "1670": {
+            "countries": [
+                "MP"
+            ],
+            "name": "Northern Mariana Islands"
+        },
+        "1671": {
+            "countries": [
+                "GU"
+            ],
+            "name": "Guam"
+        },
+        "1721": {
+            "countries": [
+                "SX"
+            ],
+            "name": "Sint Maarten"
+        },
+        "1758": {
+            "countries": [
+                "LC"
+            ],
+            "name": "Saint Lucia"
+        },
+        "1767": {
+            "countries": [
+                "DM"
+            ],
+            "name": "Dominica"
+        },
+        "1784": {
+            "countries": [
+                "VC"
+            ],
+            "name": "Saint Vincent and the Grenadines"
+        },
+        "1787": {
+            "countries": [
+                "PR"
+            ],
+            "name": "Puerto Rico"
+        },
+        "1809": {
+            "countries": [
+                "DO"
+            ],
+            "name": "Dominican Republic"
+        },
+        "1829": {
+            "countries": [
+                "DO"
+            ],
+            "name": "Dominican Republic"
+        },
+        "1849": {
+            "countries": [
+                "DO"
+            ],
+            "name": "Dominican Republic"
+        },
+        "1868": {
+            "countries": [
+                "TT"
+            ],
+            "name": "Trinidad and Tobago"
+        },
+        "1869": {
+            "countries": [
+                "KN"
+            ],
+            "name": "Saint Kitts and Nevis"
+        },
+        "1876": {
+            "countries": [
+                "JM"
+            ],
+            "name": "Jamaica"
+        },
+        "1939": {
+            "countries": [
+                "PR"
+            ],
+            "name": "Puerto Rico"
+        }
+    }
+}

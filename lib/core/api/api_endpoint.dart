@@ -1,0 +1,259 @@
+class ApiEndpoints {
+  // OLD backend (Express, no version segment) — kept for rollback reference
+  // during the NestJS migration. See docs/doc_v1/OLD_VS_NEW_API_MIGRATION_GUIDE.md.
+  // static const String baseUrl = 'https://YOUR_OLD_BASE_URL/api';
+  // static const String socketUrl = 'https://YOUR_OLD_BASE_URL';
+
+  // NEW backend (NestJS, global prefix `api` + URI version `v1`)
+  // static const String baseUrl = 'https://YOUR_OLD_BASE_URL/api/v1';
+  // static const String socketUrl = 'https://YOUR_OLD_BASE_URL';
+  // static const String baseUrl = 'https://api.flickpitch.com/api/v1';
+  // static const String socketUrl = 'https://api.flickpitch.com';
+  // static const String baseUrl = 'https://api.flickpitch.com/api/v1';
+  // static const String socketUrl = 'https://api.flickpitch.com';
+  static const String baseUrl = 'https://api.flickpitch.com/api/v1';
+  static const String socketUrl = 'https://api.flickpitch.com';
+
+  // NEW has no `/config/` white-label endpoint at all (confirmed absent
+  // from backend source — only `src/settings` exists, no `config`/
+  // `project-conf` module). `/settings` (public) is the real NEW surface,
+  // but it only covers 4 of OLD's ~35 config fields: privacy_policy,
+  // terms_and_conditions, phone_authentication, email_authentication.
+  // Everything else (app name, logos, theme colors, Twilio creds, demo
+  // credential, ...) has no backend home — ProjectConfigRepository
+  // merges these 4 real fields onto local defaults rather than inventing
+  // values for the rest.
+  static const String projectConfig = "/settings";
+  // NEW's byte-compatible legacy shim: returns {status,data:{Records,
+  // Pagination},message,toast} matching OLD's NotificationListModel
+  // exactly (source of truth: users.controller.ts/users.service.ts
+  // listBroadcastNotifications, not the migration guide, which claimed
+  // this had no replacement). Table is currently unpopulated (no admin
+  // panel writes to it), so this returns an empty list in practice today.
+  static const String listBroadcastNotification =
+      "/users/list-broadcast-notification";
+  static const String registerEmail = "/users/signup";
+  static const String registerPhone = "/users/signup";
+  static const String verifyOtpPhone = "/users/verfyOtp";
+  static const String verifyOtpEmail = "/users/verfyOtp";
+  static const String userNameCheck = "/users/find-user";
+  static const String userCreateProfile = "/users/updateUser";
+  // Clears the logged-in user's profile picture / catalog avatar.
+  // `DELETE /users/avatar` takes no body and identifies the user purely from
+  // the bearer token (added by ApiClient's interceptor), so removing a photo
+  // is a separate call from `updateUser` — which only ever SETS an avatar
+  // through its multipart branch and has no "unset" field.
+  static const String deleteAvatar = "/users/avatar";
+  // NEW merges OLD's two endpoints (create-contacts full-overwrite +
+  // update-contacts merge) into one upsert-only endpoint: never deletes a
+  // stale contact, discards the locally-synced `name` (never stored).
+  static const String userCreateContact = "/contacts/sync";
+  // NEW: GET not POST, query params (search/limit/offset), response is
+  // {items, total, limit, offset} — `name` here is the matched app user's
+  // own name, not the local address-book name.
+  static const String getContacts = "/contacts";
+
+  /// Privacy-preserving contact discovery: the device uploads HMAC-SHA256
+  /// digests only (see ContactHash), never plaintext phone numbers.
+  static const String contactsDiscoverConfig = "/contacts/discover/config";
+  static const String contactsDiscover = "/contacts/discover";
+  // RESOLVED: confirmed against ContactsController source — NEW has no
+  // incremental delta-sync endpoint at all, only `sync` (POST, full upsert)
+  // and `list` (GET) above. There is nothing to point this at; ContactProvider
+  // now always re-syncs the full contact list through `userCreateContact`
+  // instead (see ContactProvider.doFullSync).
+  // `DELETE /users` (no body) — anonymizes the profile, logs out every
+  // device, keeps message history; the number can re-register as a new user.
+  static const String deleteAcc = "/users";
+  // NEW: different controller module entirely (`auth`, not `users`); public
+  // route, no body/header expected server-side.
+  static const String logout = "/auth/logout";
+  // NEW: JSON + pre-uploaded mediaId (see `media` below), not multipart —
+  // adds text-only stories + audience targeting (§8.2/§8.3):
+  //   POST   /stories {type, mediaId?, caption?, backgroundColor?, fontStyle?, visibility?, visibleToUserIds?}
+  //   GET    /stories/feed?cursor=&limit=          flat, cursor — was bucketed (recent/viewed/my)
+  //   GET    /stories/user/:userId                 one user's stories
+  //   POST   /stories/:id/view                     was PUT with body {story_id}
+  //   DELETE /stories/:id                           path param, soft-delete (deletedAt) — was DELETE with body
+  //   GET    /stories/:id/viewers                   author-only; replaces the embedded viewers array
+  //   POST/DELETE /stories/:id/react                new capability
+  static const String stories = "/stories";
+  // ❌ REMOVED in NEW: no replacement for a single-story-by-id fetch with
+  // embedded viewer list — split into GET /stories/user/:userId (content)
+  // and GET /stories/:id/viewers (viewers, author-only) above (§8.3).
+  // static const String getStory = '/story/get-story';
+  // NEW's presigned-upload flow (§8.2) — replaces OLD's single multipart
+  // POST-with-pictureType used for every upload (chat/story/avatar alike):
+  //   POST /media/upload-url {filename, mimeType, sizeBytes, context}  -> {mediaId, uploadUrl, storageKey, expiresIn}
+  //   PUT  <uploadUrl>                                                  raw bytes, S3 direct (MEDIAFLOW=LOCAL: /media/local-upload/:token instead)
+  //   POST /media/{id}/confirm {storageKey, mimeType, sizeBytes}       -> {cdnUrl,...}
+  // `context` (chat|group|status|avatar) replaces OLD's 12-value pictureType.
+  static const String media = "/media";
+  // NEW merges send + forward into one JSON endpoint (media must be
+  // pre-uploaded first via the media module — Phase 6, not built yet —
+  // referenced by `attachmentMediaIds`, not a raw file field), and moves
+  // message list/pin/star/delete/read/delivered/reactions all under this
+  // one `/messages` resource — see MessageRepository for exact path-
+  // building (§6.2/§6.3/§17):
+  //   POST   $messages/:conversationId                     send (clientMessageId, type, body?, attachmentMediaIds?, replyToMessageId?, forwardOfMessageId?, metadata?)
+  //   GET    $messages/:conversationId?beforeSeq=&afterSeq=&limit=   list, cursor-based (conversationSeq)
+  //   PATCH  $messages/:messageId                           edit (new capability)
+  //   POST/DELETE $conversations/:id/pins/:messageId        pin/unpin, no auto-expiry
+  //   GET    $conversations/:id/pins                        list pinned
+  //   POST/DELETE $messages/:messageId/star                 star/unstar, no socket event fires
+  //   GET    $messages/starred?cursor=&limit=                starred list, no chat_id filter
+  //   DELETE $messages/:messageId/me                        delete for me
+  //   DELETE $messages/:messageId                            delete for everyone (doesn't clear pins/stars)
+  //   POST   $messages/:conversationId/read {upToSeq}        watermark model — NOT message.status
+  //   POST   $messages/:conversationId/delivered {upToSeq}
+  //   POST/DELETE/GET $messages/:messageId/reactions          new capability, no socket event fires
+  // Subscriptions (Google Play / App Store), see docs/subscription-backend.md
+  static const String subscriptionPlans = "/subscriptions/plans?user_type=business";
+  static const String subscriptionVerify = "/subscriptions/verify";
+  static const String subscriptionMe = "/subscriptions/me";
+  static const String subscriptionHistory = "/subscriptions/history";
+  static const String messages = "/messages";
+  // NEW: own endpoint, multi-select opaque optionIds, no socket event fires
+  // on vote — see MessageRepository.votePoll/createPoll/getPoll/closePoll.
+  //   POST $conversations/:id/polls   create
+  //   GET  $polls/:pollId              get
+  //   POST $polls/:pollId/vote {optionIds:[...]}
+  //   POST $polls/:pollId/close
+  static const String polls = "/polls";
+  // ❌ REMOVED in NEW, no REST replacement (WebSocket presence only —
+  // presence_update/presence_snapshot, wired in socket_event_controller.dart
+  // — event-name rework is Phase 7).
+  // static const String checkUserOnlineStatus = "/users/is-online";
+  // NEW merges 1:1 creation, group creation, group update, archive/unarchive,
+  // leave, and participant add/remove all under this one resource, with the
+  // id (and sub-action) in the path rather than a body field — see
+  // ConversationRepository for exact path-building (§5.2/§5.3/§17):
+  //   POST   $conversations                              create (1:1 or group)
+  //   GET    $conversations?cursor=&limit=&archived=      list
+  //   GET    $conversations/:id                           single fetch
+  //   PATCH  $conversations/:id                           update title/avatarMediaId (admin/owner only now)
+  //   POST   $conversations/:id/participants               add member(s)
+  //   DELETE $conversations/:id/participants/:userId       remove member
+  //   POST   $conversations/:id/leave                      leave (self)
+  //   PATCH  $conversations/:id/archive | /unarchive        two explicit calls, no more toggle
+  //   DELETE $conversations/:id                             wipes history AND hides
+  //   POST   $conversations/:id/clear                       clears only MY view of the history, chat stays listed
+  static const String conversations = "/conversations";
+  // ❌ REMOVED in NEW, no replacement at all (§5.3/§5.7) — do not build a
+  // workaround. `role` ("owner"/"member") is fixed at creation; there is no
+  // API to change it after the fact. Flagged in GroupProvider/group_info.dart.
+  // static const String makeGroupAdmin = "/chat/create-group-admin";
+  // static const String removeGroupAdmin = "/chat/remove-group-admin";
+  // ❌ REMOVED in NEW, no replacement (§5.3/§5.6) — group members now come
+  // from the conversation's own `participants[]` (id/role only, no
+  // name/avatar — must batch-fetch user profiles separately).
+  // static const String groupMembers = '/chat/group-members';
+  // ❌ REMOVED in NEW, no replacement (§5.3/§5.6) — no cross-chat search by
+  // name; ChatProvider.searchChats now filters the already-loaded list
+  // client-side instead of calling a server endpoint.
+  // static const String searchChat = "/chat/search-chat";
+  // ❌ lockChat/resetChatPin/removeChatPin REMOVED — the new backend has no
+  // chat-lock/PIN feature at all. `unlockChat` is kept only because a
+  // pre-existing (now unreachable) unlock-gating check still calls it.
+  static const String unlockChat = '/chat/unlock-chat';
+
+  static const String getAllAvatars = "/avatar/get-all-avatars";
+  // NEW folds block/unblock into `users`, as two explicit verbs on a single
+  // path instead of one toggle endpoint: POST to block, DELETE to unblock,
+  // target id in the path (`$userBlock/$userId/block`). No more chat_id
+  // param, no more response body (2xx status only).
+  static const String userBlock = "/users";
+  // NEW: `GET /users/:id` (users.service.getById -> toPublicUser). camelCase
+  // curated user object, no business-profile concept. 404 if not found or
+  // blocked either way. Replaces OLD's `POST /find-user {user_id}` (which
+  // now 400s on `user_id`).
+  static const String userById = "/users";
+  // NEW: `GET /business/:userId` — public business profile + catalog of a
+  // peer. Never 404s: non-business / blocked peers get `is_business: false`.
+  static const String businessById = "/business";
+
+  // ---- Business app (catalog / labels / auto-replies / dashboard) ----
+  static const String business = "/business";
+  static const String businessProfile = "/business/profile";
+  static const String businessAutoReplies = "/business/auto-replies";
+  static const String businessDashboard = "/business/dashboard";
+  static const String catalogCategories = "/catalog/categories";
+  static const String catalog = "/catalog";
+  static const String chatLabels = "/chat-labels";
+  static const String communities = "/communities";
+  // NEW: bare unpaginated array, GET not POST, no `page` param.
+  static const String blockList = "/users/blocked";
+  // NEW's delete-chat equivalent is `DELETE $conversations/:id` — always
+  // wipes AND hides, no more delete_chat:true/false tri-state. See
+  // ConversationRepository.deleteConversation.
+  // static const String clearChat = "/chat/clear-chat";
+  // ❌ REMOVED in NEW — confirmed absent from actual backend source (no
+  // `report` module/controller anywhere in src/; the only "report" hits in
+  // the whole backend are unrelated Firebase/presence logging code). User
+  // Reporting has no NEW-side home at all. ReportRepository calls are
+  // disabled client-side; see its comments — do not point these at a real
+  // request.
+  static const String reportTypes = "/report/report-types";
+  static const String reportUser = "/report/report-user";
+  // ❌ REMOVED in NEW — `POST /chat/chat-media` doesn't exist server-side.
+  // Replaced by `GET /messages/:conversationId/media?category=`; see
+  // MessageRepository.getConversationMedia / ChatRepository.getChatMedia.
+  // NEW moves call session lifecycle to REST + default-namespace socket
+  // notifications (§7.4/§7.6/§17) — `peer_id` auto-create-chat is gone,
+  // `POST /calls` needs an existing conversationId. The endpoints below are
+  // session state only (ringing/answered/declined/ended); media runs on the
+  // separate `/calls` socket namespace as a PeerJS mesh — see
+  // PeerJsCallController and PEERJS_MIGRATION.md.
+  //   POST /calls                        initiate (conversationId, callType)
+  //   POST /calls/:id/answer
+  //   POST /calls/:id/decline
+  //   POST /calls/:id/leave
+  //   POST /calls/:id/end
+  //   GET  /calls/:id
+  //   GET  /calls/history?cursor=&limit=
+  static const String calls = "/calls";
+  // static const String callHistory = "/chat/call-history"; // superseded by $calls/history above
+  // static const String makeCall = "/call/make-call"; // superseded by POST $calls above
+  // ❌ REMOVED in NEW, no replacement found anywhere (§9.3/§16: "Get counts
+  // (starred/block/notif) | POST /users/get-counts | — | Removed, no
+  // replacement found"). ChatRepository.countRepo() now derives each count
+  // from its own confirmed NEW source instead of one combined call — see
+  // that method for the per-field breakdown (starred-message total has no
+  // confirmed source at all and is flagged there, not invented).
+  // static const String getCounts = "/users/get-counts";
+  // The migration guide claimed no broadcast replacement existed, but the
+  // actual backend source (users.controller.ts) still has a byte-compatible
+  // `list-broadcast-notification` shim — see `listBroadcastNotification`
+  // above, which is what ProjectConfigRepository now calls. There's still
+  // no `mark-as-seen-broadcast-notification` route in the backend, so
+  // marking read only applies to NEW's separate genuinely-new per-user feed
+  // below (§9.2), not to broadcast rows:
+  //   GET  /notifications?cursor=&limit=      cursor-paginated, per-user
+  //   GET  /notifications/unread-count
+  //   POST /notifications/:id/read
+  //   POST /notifications/read-all
+  // NEW's writer (`NotificationsService.notify()`) is dead code on the
+  // backend — nothing ever populates this feed yet, so it will read empty
+  // in practice until that's wired up server-side; not a frontend bug.
+  static const String notifications = "/notifications";
+
+  // ❌ REMOVED in NEW — confirmed absent from actual backend source (no
+  // `language` module/controller anywhere in src/, not just per the
+  // migration guide). No i18n/translation surface exists server-side at
+  // all. LanguageRepository calls are disabled client-side; see its
+  // comments — do not point these at a real request.
+  static const String getlanguage = "/language/get-language";
+  static const String worldList = "/language/get-language-words";
+
+  // AI Assistant — a normal 1:1 chat with a reserved bot user
+  // (`userName: "ai_assistant"`); messages go through `messages` as usual.
+  //   GET $aiAssistant/config   -> {enabled, provider, model}
+  //   GET $aiAssistant/chat     -> Conversation (get-or-create, seeded with
+  //                                an onboarding script on the first call)
+  static const String aiAssistant = "/ai-assistant";
+
+  static const String createBotChat = "/chatbot/chat";
+  static const String getBotChatHistory = "/chatbot/conversations";
+
+  // Add more endpoints as needed
+}

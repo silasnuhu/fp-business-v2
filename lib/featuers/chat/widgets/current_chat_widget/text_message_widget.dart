@@ -1,0 +1,568 @@
+import 'dart:math';
+
+import 'package:flutter/gestures.dart';
+import 'package:flutter/material.dart';
+import 'package:whoxa/design/fp_tokens.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:whoxa/utils/packages/read_more/read_more_text.dart';
+import 'package:whoxa/featuers/chat/data/chats_model.dart' as chats;
+import 'package:whoxa/featuers/chat/widgets/current_chat_widget/chat_related_widget.dart';
+import 'package:whoxa/utils/app_size_config.dart';
+import 'package:whoxa/utils/preference_key/constant/app_colors.dart';
+import 'package:whoxa/utils/preference_key/constant/app_text_style.dart';
+import 'package:whoxa/utils/preference_key/constant/strings.dart';
+
+class TextMessageWidget extends StatelessWidget {
+  final chats.Records chat;
+  final String currentUserId;
+  final bool isStarred; // ✅ NEW: Star status parameter
+  final Function(int)? onReplyTap; // ✅ NEW: Callback for reply tap
+  final bool openedFromStarred; // If Opened from the Starred Messages Screen
+  final VoidCallback? onRetry; // ✅ NEW: Retry callback for failed messages
+
+  const TextMessageWidget({
+    super.key,
+    required this.chat,
+    required this.currentUserId,
+    this.isStarred = false, // ✅ NEW: Default to false
+    this.onReplyTap, // ✅ NEW: Optional callback for reply tap
+    this.openedFromStarred =
+        false, // If Opened from the Starred Messages Screen
+    this.onRetry, // ✅ NEW: Retry callback
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isSentByMe = chat.senderId.toString() == currentUserId;
+    final hasParentMessage = chat.parentMessage != null;
+
+    final messageText = chat.messageContent ?? '';
+    final parentText = chat.parentMessage?['message_content'] ?? '';
+    final senderName = ChatRelatedWidget.getSenderName(
+      context,
+      chat.parentMessage ?? {},
+      currentUserId,
+    );
+    final messageType = chat.messageType ?? 'text';
+    final parentType = chat.parentMessage?['message_type'] ?? 'text';
+
+    final messageWidth = _calculateTextWidth1(
+      context,
+      messageText,
+      messageType,
+    );
+    final parentWidth = hasParentMessage
+        ? _calculateTextWidth1(context, parentText, parentType)
+        : 0.0;
+    final senderNameWidth = _calculateTextWidth1(context, senderName, 'text');
+
+    final totalBubbleWidth = min(
+      SizeConfig.width(78),
+      max(max(messageWidth, parentWidth), senderNameWidth) + 30,
+    ); // 30 for padding
+
+    return Column(
+      crossAxisAlignment: openedFromStarred
+          ? CrossAxisAlignment.start
+          : isSentByMe
+          ? CrossAxisAlignment.end
+          : CrossAxisAlignment.start,
+      children: [
+        Container(
+          constraints: BoxConstraints(maxWidth: totalBubbleWidth),
+          decoration: BoxDecoration(
+            // Brand bubbles: lavender for mine, light surface for theirs.
+            // Tokens keep this correct in both light and dark mode.
+            color: isSentByMe
+                ? (Fp.dark
+                      ? Fp.violet.withValues(alpha: 0.32)
+                      : const Color(0xFFEDE6FF))
+                : Fp.inkRaised,
+            border: isSentByMe
+                ? null
+                : Border.all(color: Fp.hairline, width: 1),
+            // Modern WhatsApp shape: fully rounded bubbles with a tighter
+            // corner on the sender's side, instead of a painted tail.
+            borderRadius: BorderRadius.only(
+              topLeft: const Radius.circular(18),
+              topRight: const Radius.circular(18),
+              bottomLeft: Radius.circular(isSentByMe ? 18 : 6),
+              bottomRight: Radius.circular(isSentByMe ? 6 : 18),
+            ),
+          ),
+          child: Padding(
+            padding: SizeConfig.getPaddingSymmetric(
+              horizontal: hasParentMessage ? 3 : 12,
+              vertical: hasParentMessage ? 3 : 9,
+            ),
+            child: Column(
+              crossAxisAlignment: isSentByMe
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // ✅ ENHANCED: Show parent message if this is a reply
+                if (hasParentMessage) ...[
+                  _buildParentMessagePreview(
+                    context,
+                    isSentByMe,
+                    totalBubbleWidth,
+                  ),
+                  SizedBox(height: 8),
+                ],
+
+                // Main message content
+                Padding(
+                  padding: SizeConfig.getPaddingOnly(
+                    left: hasParentMessage ? 10 : 0,
+                    right: hasParentMessage ? 8 : 0,
+                  ),
+                  child: RichTextDisplay(
+                    // Keeps each message's expanded/collapsed state with it.
+                    key: ValueKey('message_text_${chat.messageId}'),
+                    text: chat.messageContent ?? '',
+                    // WhatsApp-like body: 15px with relaxed leading. The old
+                    // 12px caption style made bubbles look cramped.
+                    baseStyle: AppTypography.innerText12Ragu(context).copyWith(
+                      fontSize: 15,
+                      height: 1.32,
+                      letterSpacing: 0.1,
+                      // Bubbles use Fp colours, so the text must too. Mixing
+                      // in AppThemeManage.textColor produced white-on-white
+                      // whenever the app theme and Fp.dark disagreed.
+                      color: Fp.text,
+                    ),
+                    readMoreColor: isSentByMe
+                        ? ThemeColorPalette.getTextColor(
+                            AppColors.appPriSecColor.primaryColor,
+                          )
+                        : AppColors.appPriSecColor.primaryColor,
+                  ),
+                  //_buildRichText(context, messageText, isSentByMe),
+                  // Text(
+                  //   chat.messageContent ?? '',
+                  //   style: AppTypography.innerText12Ragu(context).copyWith(
+                  //     color:
+                  //         isSentByMe
+                  //             ? ThemeColorPalette.getTextColor(
+                  //               AppColors.appPriSecColor.primaryColor,
+                  //             )
+                  //             : AppThemeManage.appTheme.textColor,
+                  //   ),
+                  // ),
+                ),
+                // Time + ticks sit inside the bubble, bottom-right, the way
+                // WhatsApp pins them to the message edge.
+                if (!openedFromStarred)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2, right: 2, bottom: 1),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: ChatRelatedWidget.buildMetadataRow(
+                        context: context,
+                        chat: chat,
+                        isStarred: isStarred,
+                        isSentByMe: isSentByMe,
+                        onRetry: onRetry,
+                      ),
+                    ),
+                  ),
+                isSentByMe
+                    ? hasParentMessage
+                          ? SizedBox(height: SizeConfig.height(2))
+                          : SizedBox.shrink()
+                    : SizedBox.shrink(),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ✅ ENHANCED: Build parent message preview with media support and tap functionality
+  Widget _buildParentMessagePreview(
+    BuildContext context,
+    bool isSentByMe,
+    double width,
+  ) {
+    final parentMessage = chat.parentMessage!;
+    final parentContent = parentMessage['message_content'] ?? 'Message';
+    final parentType = parentMessage['message_type'] ?? 'text';
+    final parentThumbnail = parentMessage['message_thumbnail'];
+    final parentMessageId = parentMessage['message_id'];
+
+    return GestureDetector(
+      onTap: () {
+        // ✅ NEW: Handle tap to navigate to original message
+        if (onReplyTap != null && parentMessageId != null) {
+          onReplyTap!(parentMessageId as int);
+        }
+      },
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: width),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(0, 0, 8, 0),
+          decoration: BoxDecoration(
+            color: Fp.dark
+                ? Colors.white.withValues(alpha: 0.06)
+                : Colors.black.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(8),
+            border: Border(left: BorderSide(color: Fp.violet, width: 3)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Header with reply icon and sender name
+              Row(
+                children: [
+                  Text(
+                    ChatRelatedWidget.getSenderName(
+                      context,
+                      parentMessage,
+                      currentUserId,
+                    ),
+                    style: AppTypography.captionText(context).copyWith(
+                      color: AppColors.appPriSecColor.primaryColor,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 1),
+
+              // ✅ Media preview or text content
+              _buildParentMessageContent(
+                context,
+                parentType,
+                parentContent,
+                parentThumbnail,
+                isSentByMe,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ✅ Build parent message content based on type
+  Widget _buildParentMessageContent(
+    BuildContext context,
+    String messageType,
+    String content,
+    String? thumbnail,
+    bool isSentByMe,
+  ) {
+    // ✅ Check if the message is deleted and show only text
+    if (content == 'This message was deleted.' ||
+        content == 'This message was deleted' ||
+        content.isEmpty) {
+      return ChatRelatedWidget.buildTextPreview(
+        context: context,
+        content: AppString.thisMessageWasDeleted,
+        isSentByMe: isSentByMe,
+      );
+    }
+
+    switch (messageType.toLowerCase()) {
+      case 'voice':
+        return ChatRelatedWidget.buildVoicePreview(
+          context: context,
+          isSentByMe: isSentByMe,
+        );
+
+      case 'image':
+        return ChatRelatedWidget.buildImagePreview(
+          context: context,
+          imageUrl: content,
+          isSentByMe: isSentByMe,
+        );
+      case 'gif':
+        return ChatRelatedWidget.buildGifPreview(
+          context: context,
+          imageUrl: content,
+          isSentByMe: isSentByMe,
+        );
+      case 'video':
+        return ChatRelatedWidget.buildVideoPreview(
+          context: context,
+          videoUrl: content,
+          thumbnailUrl: thumbnail,
+          isSentByMe: isSentByMe,
+        );
+      case 'document':
+      case 'doc':
+      case 'pdf':
+        return ChatRelatedWidget.buildDocumentPreview(context, isSentByMe);
+      case 'location':
+        return ChatRelatedWidget.buildLocationPreview(context, isSentByMe);
+      case 'contact':
+        return ChatRelatedWidget.buildContactPreview(context, isSentByMe);
+      case 'link':
+        return ChatRelatedWidget.buildLinkPreview(
+          context: context,
+          content: content,
+          isSentByMe: isSentByMe,
+        );
+      case 'poll':
+        return ChatRelatedWidget.buildPollPreview(
+          context: context,
+          content: content,
+          isSentByMe: isSentByMe,
+        );
+      case 'text':
+      default:
+        return ChatRelatedWidget.buildTextPreview(
+          context: context,
+          content: content,
+          isSentByMe: isSentByMe,
+        );
+    }
+  }
+
+  // double _calculateTextWidth(BuildContext context, String text) {
+  //   final TextPainter textPainter = TextPainter(
+  //     text: TextSpan(text: text, style: AppTypography.mediumText(context)),
+  //     maxLines: 1,
+  //     textDirection: TextDirection.ltr,
+  //   )..layout();
+
+  //   // Add some padding so text doesn't hit the edge
+  //   return textPainter.size.width + 24;
+  // }
+
+  double _calculateTextWidth1(
+    BuildContext context,
+    String messageContent,
+    String messageType,
+  ) {
+    String displayText;
+
+    switch (messageType.toLowerCase()) {
+      case 'poll':
+      case 'link':
+      case 'text':
+        displayText = messageContent;
+        break;
+      case 'image':
+        displayText = 'Image';
+        break;
+      case 'video':
+        displayText = 'Video';
+        break;
+      case 'document':
+      case 'doc':
+      case 'pdf':
+        displayText = 'Document';
+        break;
+      case 'location':
+        displayText = 'Location';
+        break;
+      case 'gif':
+        displayText = 'gif';
+        break;
+      default:
+        displayText = '';
+    }
+
+    final TextPainter textPainter = TextPainter(
+      text: TextSpan(
+        text: displayText,
+        style: AppTypography.mediumText(context),
+      ),
+      maxLines: 1,
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    return textPainter.size.width + 24; // 24 = padding
+  }
+}
+
+//======================================================================================================
+/// if user can text message show like font style bold, underline, italic style, center line text, url text
+class RichTextDisplay extends StatelessWidget {
+  final String text;
+  final TextStyle baseStyle;
+  final TextStyle? linkStyle;
+
+  /// Long messages are collapsed to this many lines with a "Read more" toggle.
+  final int trimLines;
+
+  /// Colour of the "Read more" / "Read less" toggle; defaults to the text's.
+  final Color? readMoreColor;
+
+  const RichTextDisplay({
+    super.key,
+    required this.text,
+    required this.baseStyle,
+    this.linkStyle,
+    this.trimLines = 15,
+    this.readMoreColor,
+  });
+
+  // Matches the whole message, so ReadMoreText renders exactly the spans
+  // built below (links + formatting) instead of re-parsing the text itself.
+  static final _wholeTextRegex = RegExp(r'^[\s\S]+$');
+
+  // ✅ URL regex
+  static final _urlRegex = RegExp(
+    r'(https?://[^\s]+|www\.[^\s]+)',
+    caseSensitive: false,
+  );
+
+  Future<void> _launchUrl(String url) async {
+    String finalUrl = url.startsWith('http') ? url : 'https://$url';
+    final uri = Uri.parse(finalUrl);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    }
+  }
+
+  // ✅ Parse a raw string segment into styled TextSpans (bold/italic/underline/strike)
+  List<InlineSpan> _parseFormatting(String raw, TextStyle base) {
+    // Ordered: bold *, italic _, underline ~, strikethrough --
+    final patterns = [
+      _FormatPattern(
+        regex: RegExp(r'\*(.*?)\*'),
+        apply: (s) => s.copyWith(fontWeight: FontWeight.bold),
+      ),
+      _FormatPattern(
+        regex: RegExp(r'_(.*?)_'),
+        apply: (s) => s.copyWith(fontStyle: FontStyle.italic),
+      ),
+      _FormatPattern(
+        regex: RegExp(r'~(.*?)~'),
+        apply: (s) => s.copyWith(decoration: TextDecoration.underline),
+      ),
+      _FormatPattern(
+        regex: RegExp(r'--(.*?)--'),
+        apply: (s) => s.copyWith(decoration: TextDecoration.lineThrough),
+      ),
+    ];
+
+    List<InlineSpan> spans = [TextSpan(text: raw, style: base)];
+
+    for (final pattern in patterns) {
+      final newSpans = <InlineSpan>[];
+      for (final span in spans) {
+        if (span is TextSpan && span.recognizer == null) {
+          final text = span.text ?? '';
+          final currentStyle = span.style ?? base;
+          final matches = pattern.regex.allMatches(text).toList();
+          if (matches.isEmpty) {
+            newSpans.add(span);
+            continue;
+          }
+          int lastEnd = 0;
+          for (final match in matches) {
+            if (match.start > lastEnd) {
+              newSpans.add(
+                TextSpan(
+                  text: text.substring(lastEnd, match.start),
+                  style: currentStyle,
+                ),
+              );
+            }
+            newSpans.add(
+              TextSpan(
+                text: match.group(1),
+                style: pattern.apply(currentStyle),
+              ),
+            );
+            lastEnd = match.end;
+          }
+          if (lastEnd < text.length) {
+            newSpans.add(
+              TextSpan(text: text.substring(lastEnd), style: currentStyle),
+            );
+          }
+        } else {
+          newSpans.add(span);
+        }
+      }
+      spans = newSpans;
+    }
+
+    return spans;
+  }
+
+  // ✅ Final build: first split by URL, then apply formatting to non-URL parts
+  List<InlineSpan> _buildSpans() {
+    final resolvedLinkStyle =
+        linkStyle ??
+        baseStyle.copyWith(
+          color: Colors.blue,
+          decoration: TextDecoration.underline,
+          decorationColor: Colors.blue,
+        );
+
+    final urlMatches = _urlRegex.allMatches(text).toList();
+    if (urlMatches.isEmpty) {
+      return _parseFormatting(text, baseStyle);
+    }
+
+    final spans = <InlineSpan>[];
+    int lastEnd = 0;
+
+    for (final match in urlMatches) {
+      if (match.start > lastEnd) {
+        spans.addAll(
+          _parseFormatting(text.substring(lastEnd, match.start), baseStyle),
+        );
+      }
+      final url = match.group(0)!;
+      spans.add(
+        TextSpan(
+          text: url,
+          style: resolvedLinkStyle,
+          recognizer: TapGestureRecognizer()..onTap = () => _launchUrl(url),
+        ),
+      );
+      lastEnd = match.end;
+    }
+
+    if (lastEnd < text.length) {
+      spans.addAll(_parseFormatting(text.substring(lastEnd), baseStyle));
+    }
+
+    return spans;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final toggleStyle = baseStyle.copyWith(
+      color: readMoreColor ?? baseStyle.color,
+      fontWeight: FontWeight.w600,
+    );
+
+    return ReadMoreText(
+      text,
+      style: baseStyle,
+      trimMode: TrimMode.Line,
+      trimLines: trimLines,
+      trimCollapsedText: AppString.readMore,
+      trimExpandedText: ' ${AppString.readLess}',
+      moreStyle: toggleStyle,
+      lessStyle: toggleStyle,
+      // Same as the previous RichText, which didn't apply system text scaling.
+      textScaler: TextScaler.noScaling,
+      annotations: [
+        Annotation(
+          regExp: _wholeTextRegex,
+          spanBuilder: ({required String text, TextStyle? textStyle}) =>
+              TextSpan(children: _buildSpans()),
+        ),
+      ],
+    );
+  }
+}
+
+// ✅ Helper class for format patterns
+class _FormatPattern {
+  final RegExp regex;
+  final TextStyle Function(TextStyle) apply;
+  const _FormatPattern({required this.regex, required this.apply});
+}

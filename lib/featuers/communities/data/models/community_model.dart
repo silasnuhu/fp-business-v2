@@ -1,0 +1,147 @@
+/// Community + state-group models for `GET /communities` and
+/// `GET /communities/:id` (the WhatsApp-Communities replacement on the
+/// Flickpitch API). Everything arrives as snake_case-free JSON from NestJS,
+/// so the keys here are the camelCase names the service already returns.
+library;
+
+class CommunitySummary {
+  final String communityId;
+  final String name;
+  final String? slug;
+  final String? description;
+  final String? avatarUrl;
+  final String? inviteCode;
+  final String role;
+  final int memberCount;
+  final int groupCount;
+
+  /// WhatsApp-style per-community state: mute, pin and the announcement
+  /// badge (unread announcements surface on the community row).
+  final bool muted;
+  final bool pinned;
+  final int announcementUnread;
+  final String? announcementConversationId;
+
+  const CommunitySummary({
+    required this.communityId,
+    required this.name,
+    this.slug,
+    this.description,
+    this.avatarUrl,
+    this.inviteCode,
+    this.role = 'member',
+    this.memberCount = 0,
+    this.groupCount = 0,
+    this.muted = false,
+    this.pinned = false,
+    this.announcementUnread = 0,
+    this.announcementConversationId,
+  });
+
+  bool get canManage => role == 'owner' || role == 'admin';
+
+  factory CommunitySummary.fromJson(Map<String, dynamic> json) {
+    int asInt(dynamic v) => v is int ? v : int.tryParse('${v ?? 0}') ?? 0;
+    return CommunitySummary(
+      communityId: '${json['communityId'] ?? ''}',
+      name: (json['name'] ?? 'Community').toString(),
+      slug: json['slug']?.toString(),
+      description: json['description']?.toString(),
+      avatarUrl: json['avatarUrl']?.toString(),
+      inviteCode: json['inviteCode']?.toString(),
+      role: (json['role'] ?? 'member').toString(),
+      memberCount: asInt(json['memberCount']),
+      groupCount: asInt(json['groupCount']),
+      muted: json['muted'] == true,
+      pinned: json['pinned'] == true,
+      announcementUnread: asInt(json['announcementUnread']),
+      announcementConversationId: json['announcementConversationId']?.toString(),
+    );
+  }
+}
+
+class CommunityGroup {
+  final String conversationId;
+  final String title;
+  final String? label;
+  final String? description;
+  final int memberCount;
+  final int? maxMembers;
+  final bool joined;
+  final bool onlyAdminsCanPost;
+
+  const CommunityGroup({
+    required this.conversationId,
+    required this.title,
+    this.label,
+    this.description,
+    this.memberCount = 0,
+    this.maxMembers,
+    this.joined = false,
+    this.onlyAdminsCanPost = false,
+  });
+
+  String get displayName => (label?.trim().isNotEmpty ?? false) ? label! : title;
+
+  factory CommunityGroup.fromJson(Map<String, dynamic> json) {
+    int asInt(dynamic v) => v is int ? v : int.tryParse('${v ?? 0}') ?? 0;
+    return CommunityGroup(
+      conversationId: '${json['conversationId'] ?? ''}',
+      title: (json['title'] ?? 'Group').toString(),
+      label: json['label']?.toString(),
+      description: json['description']?.toString(),
+      memberCount: asInt(json['memberCount']),
+      maxMembers: json['maxMembers'] == null ? null : asInt(json['maxMembers']),
+      joined: json['joined'] == true,
+      onlyAdminsCanPost: json['onlyAdminsCanPost'] == true,
+    );
+  }
+}
+
+class CommunityDetail {
+  final String communityId;
+  final String name;
+  final String? description;
+  final String? avatarUrl;
+  final String? inviteCode;
+  final String role;
+  final bool isMember;
+  final bool canManage;
+  final int memberCount;
+  final List<CommunityGroup> groups;
+
+  const CommunityDetail({
+    required this.communityId,
+    required this.name,
+    this.description,
+    this.avatarUrl,
+    this.inviteCode,
+    this.role = 'member',
+    this.isMember = false,
+    this.canManage = false,
+    this.memberCount = 0,
+    this.groups = const [],
+  });
+
+  factory CommunityDetail.fromJson(Map<String, dynamic> json) {
+    int asInt(dynamic v) => v is int ? v : int.tryParse('${v ?? 0}') ?? 0;
+    final rawGroups = json['groups'];
+    return CommunityDetail(
+      communityId: '${json['communityId'] ?? ''}',
+      name: (json['name'] ?? 'Community').toString(),
+      description: json['description']?.toString(),
+      avatarUrl: json['avatarUrl']?.toString(),
+      inviteCode: json['inviteCode']?.toString(),
+      role: (json['role'] ?? 'member').toString(),
+      isMember: json['isMember'] == true,
+      canManage: json['canManage'] == true,
+      memberCount: asInt(json['memberCount']),
+      groups: rawGroups is List
+          ? rawGroups
+                .whereType<Map>()
+                .map((e) => CommunityGroup.fromJson(Map<String, dynamic>.from(e)))
+                .toList()
+          : const [],
+    );
+  }
+}

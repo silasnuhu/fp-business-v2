@@ -1,0 +1,381 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:whoxa/featuers/contacts/services/countrycode_service.dart';
+
+/// Service for detecting and caching the user's country code based on device locale and GPS.
+/// Uses singleton pattern for static access in places like ContactModel._formatPhoneNumber().
+///
+/// Detection priority:
+/// 1. Cached value (from previous detection)
+/// 2. Device locale (from system settings)
+/// 3. Device region settings (iOS/Android specific)
+/// 4. GPS location (background, non-blocking)
+/// 5. Fallback to '+1' (US) only as last resort
+class DeviceCountryCodeService {
+  // Singleton instance
+  static DeviceCountryCodeService? _instance;
+
+  // Private constructor
+  DeviceCountryCodeService._internal();
+
+  /// Get the singleton instance
+  static DeviceCountryCodeService get instance {
+    _instance ??= DeviceCountryCodeService._internal();
+    return _instance!;
+  }
+
+  // Storage keys
+  static const String _cacheKeyDialCode = 'device_country_dial_code';
+  static const String _cacheKeyIsoCode = 'device_country_iso_code';
+  static const String _cacheKeySource = 'device_country_source';
+
+  // Cached values
+  String? _cachedDialCode;
+  String? _cachedIsoCode;
+  String? _detectionSource;
+
+  // Default fallback (Priority 3: If location not available, use +1 US)
+  static const String _fallbackDialCode = '1';
+  static const String _fallbackIsoCode = 'US';
+
+  // Initialization state
+  bool _isInitialized = false;
+  bool _gpsDetectionInProgress = false;
+
+  // Secure storage instance
+  FlutterSecureStorage? _storage;
+
+  /// Initialize the service - should be called early in app startup
+  Future<void> initialize() async {
+    if (_isInitialized) return;
+
+    try {
+      _storage = const FlutterSecureStorage(
+        iOptions: IOSOptions(
+          accessibility: KeychainAccessibility.unlocked,
+          synchronizable: false,
+        ),
+      );
+
+      // 1. First, try to load from cache (instant)
+      await _loadFromCache();
+
+      // 2. If no cache, detect from locale (multiple methods)
+      if (_cachedDialCode == null) {
+        await _detectFromLocale();
+      }
+
+      // 3. If locale detection succeeded, save it
+      if (_cachedDialCode != null) {
+        await _saveToCache();
+      }
+
+      // 4. If still null, use fallback
+      if (_cachedDialCode == null) {
+        _cachedDialCode = _fallbackDialCode;
+        _cachedIsoCode = _fallbackIsoCode;
+        _detectionSource = 'fallback';
+        await _saveToCache();
+      }
+
+      _isInitialized = true;
+      debugPrint(
+        'DeviceCountryCodeService initialized: +$_cachedDialCode ($_cachedIsoCode) via $_detectionSource',
+      );
+
+      // 5. Optionally try GPS detection in background (non-blocking)
+      _tryGpsDetectionInBackground();
+    } catch (e) {
+      debugPrint('Error initializing DeviceCountryCodeService: $e');
+      // Ensure we have fallback values
+      _cachedDialCode ??= _fallbackDialCode;
+      _cachedIsoCode ??= _fallbackIsoCode;
+      _detectionSource ??= 'fallback';
+      _isInitialized = true;
+    }
+  }
+
+  /// Load cached country code from secure storage
+  Future<void> _loadFromCache() async {
+    try {
+      final dialCode = await _storage?.read(key: _cacheKeyDialCode);
+      final isoCode = await _storage?.read(key: _cacheKeyIsoCode);
+      final source = await _storage?.read(key: _cacheKeySource);
+
+      if (dialCode != null && dialCode.isNotEmpty) {
+        _cachedDialCode = dialCode;
+        _cachedIsoCode = isoCode;
+        _detectionSource = source ?? 'cache';
+        debugPrint(
+          'DeviceCountryCodeService loaded from cache: +$_cachedDialCode ($_cachedIsoCode)',
+        );
+      }
+    } catch (e) {
+      debugPrint('Error loading country code from cache: $e');
+    }
+  }
+
+  /// Save current country code to secure storage
+  Future<void> _saveToCache() async {
+    try {
+      if (_cachedDialCode != null) {
+        await _storage?.write(key: _cacheKeyDialCode, value: _cachedDialCode);
+        await _storage?.write(key: _cacheKeyIsoCode, value: _cachedIsoCode);
+        await _storage?.write(key: _cacheKeySource, value: _detectionSource);
+      }
+    } catch (e) {
+      debugPrint('Error saving country code to cache: $e');
+    }
+  }
+
+  /// Detect country from device locale using multiple methods
+  /// Priority: PlatformDispatcher locale → system locales list → device info
+  Future<void> _detectFromLocale() async {
+    try {
+      String? detectedCountryCode;
+      String detectionMethod = 'unknown';
+
+      // Method 1: Try PlatformDispatcher.instance.locale (primary locale)
+      final primaryLocale = PlatformDispatcher.instance.locale;
+      debugPrint(
+        'DeviceCountryCodeService locale detection - Primary: ${primaryLocale.languageCode}_${primaryLocale.countryCode}',
+      );
+
+      if (primaryLocale.countryCode != null && primaryLocale.countryCode!.isNotEmpty) {
+        detectedCountryCode = primaryLocale.countryCode;
+        detectionMethod = 'primary_locale';
+      }
+
+      // Method 2: If primary locale has no country, try system locales list
+      if (detectedCountryCode == null || detectedCountryCode.isEmpty) {
+        final systemLocales = PlatformDispatcher.instance.locales;
+        debugPrint('DeviceCountryCodeService: Checking ${systemLocales.length} system locales');
+
+        for (final locale in systemLocales) {
+          if (locale.countryCode != null && locale.countryCode!.isNotEmpty) {
+            detectedCountryCode = locale.countryCode;
+            detectionMethod = 'system_locales';
+            debugPrint(
+              'DeviceCountryCodeService: Found country in system locales: ${locale.languageCode}_${locale.countryCode}',
+            );
+            break;
+          }
+        }
+      }
+
+      // Method 3: Try device-specific region settings
+      if (detectedCountryCode == null || detectedCountryCode.isEmpty) {
+        detectedCountryCode = await _getDeviceRegion();
+        if (detectedCountryCode != null && detectedCountryCode.isNotEmpty) {
+          detectionMethod = 'device_region';
+        }
+      }
+
+      // If we found a country code, convert to dial code
+      if (detectedCountryCode != null && detectedCountryCode.isNotEmpty) {
+        final dialCode = CountryCodeService.getDialCodeFromISO(detectedCountryCode);
+
+        if (dialCode != null) {
+          _cachedDialCode = dialCode;
+          _cachedIsoCode = detectedCountryCode;
+          _detectionSource = detectionMethod;
+          debugPrint(
+            'DeviceCountryCodeService detected from $detectionMethod: +$dialCode ($detectedCountryCode)',
+          );
+        } else {
+          debugPrint(
+            'DeviceCountryCodeService: No dial code found for ISO: $detectedCountryCode (from $detectionMethod)',
+          );
+        }
+      } else {
+        debugPrint('DeviceCountryCodeService: No country code found from any locale method');
+      }
+    } catch (e) {
+      debugPrint('Error detecting country from locale: $e');
+    }
+  }
+
+  /// Get device region from platform-specific settings
+  Future<String?> _getDeviceRegion() async {
+    try {
+      final deviceInfo = DeviceInfoPlugin();
+
+      if (Platform.isIOS) {
+        // On iOS, we can try to get region from device info
+        // The locale information is usually more reliable on iOS
+        debugPrint('DeviceCountryCodeService: iOS platform, using locale-based detection');
+        return null; // iOS locale detection is usually reliable via PlatformDispatcher
+      } else if (Platform.isAndroid) {
+        // On Android, try to get additional region info
+        final androidInfo = await deviceInfo.androidInfo;
+        // Android doesn't directly expose country code via device_info_plus
+        // but we log device info for debugging
+        debugPrint(
+          'DeviceCountryCodeService: Android device - ${androidInfo.manufacturer} ${androidInfo.model}',
+        );
+        return null;
+      }
+
+      return null;
+    } catch (e) {
+      debugPrint('Error getting device region: $e');
+      return null;
+    }
+  }
+
+  /// Try GPS detection in background (non-blocking)
+  /// Only runs if location permission is already granted
+  void _tryGpsDetectionInBackground() {
+    if (_gpsDetectionInProgress) return;
+    _gpsDetectionInProgress = true;
+
+    // Run asynchronously without blocking
+    Future(() async {
+      try {
+        // Check if location permission is already granted (don't request it)
+        final permission = await Geolocator.checkPermission();
+
+        if (permission == LocationPermission.denied ||
+            permission == LocationPermission.deniedForever) {
+          debugPrint(
+            'DeviceCountryCodeService: Location permission not granted, skipping GPS detection',
+          );
+          return;
+        }
+
+        // Check if location service is enabled
+        final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+        if (!serviceEnabled) {
+          debugPrint(
+            'DeviceCountryCodeService: Location service not enabled, skipping GPS detection',
+          );
+          return;
+        }
+
+        // Get current position
+        final position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.low,
+            timeLimit: Duration(seconds: 10),
+          ),
+        );
+
+        // Reverse geocode to get country
+        final placemarks = await Geocoding().placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+
+        if (placemarks.isNotEmpty) {
+          final placemark = placemarks.first;
+          final countryCode = placemark.isoCountryCode;
+
+          if (countryCode != null && countryCode.isNotEmpty) {
+            final dialCode = CountryCodeService.getDialCodeFromISO(countryCode);
+
+            if (dialCode != null) {
+              // Only update if different from current
+              if (dialCode != _cachedDialCode) {
+                _cachedDialCode = dialCode;
+                _cachedIsoCode = countryCode;
+                _detectionSource = 'gps';
+                await _saveToCache();
+                debugPrint(
+                  'DeviceCountryCodeService updated from GPS: +$dialCode ($countryCode)',
+                );
+              }
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('DeviceCountryCodeService GPS detection error: $e');
+      } finally {
+        _gpsDetectionInProgress = false;
+      }
+    });
+  }
+
+  /// Get the default dial code (without + sign)
+  /// Returns '91' as fallback if not initialized
+  String getDefaultDialCode() {
+    return _cachedDialCode ?? _fallbackDialCode;
+  }
+
+  /// Get the default dial code with + sign
+  /// Returns '+91' as fallback if not initialized
+  String getDefaultDialCodeWithPlus() {
+    return '+${_cachedDialCode ?? _fallbackDialCode}';
+  }
+
+  /// Get the detected ISO country code
+  /// Returns 'IN' as fallback if not initialized
+  String getDefaultIsoCode() {
+    return _cachedIsoCode ?? _fallbackIsoCode;
+  }
+
+  /// Get the detection source ('cache', 'locale', 'gps', 'fallback')
+  String getDetectionSource() {
+    return _detectionSource ?? 'unknown';
+  }
+
+  /// Check if the service is initialized
+  bool get isInitialized => _isInitialized;
+
+  /// Manually update the country code (e.g., from user selection)
+  Future<void> updateCountryCode(String dialCode, String isoCode) async {
+    _cachedDialCode = dialCode.replaceAll('+', '');
+    _cachedIsoCode = isoCode.toUpperCase();
+    _detectionSource = 'manual';
+    await _saveToCache();
+    debugPrint(
+      'DeviceCountryCodeService manually updated: +$_cachedDialCode ($_cachedIsoCode)',
+    );
+  }
+
+  /// Force refresh detection (useful for testing or after location permission change)
+  Future<void> refreshDetection() async {
+    debugPrint('DeviceCountryCodeService: Forcing refresh detection');
+
+    // Try locale first (multiple methods)
+    await _detectFromLocale();
+
+    // Save if successful
+    if (_cachedDialCode != null) {
+      await _saveToCache();
+    }
+
+    // Try GPS detection
+    _tryGpsDetectionInBackground();
+  }
+
+  /// Clear cached data (useful for logout)
+  Future<void> clearCache() async {
+    try {
+      await _storage?.delete(key: _cacheKeyDialCode);
+      await _storage?.delete(key: _cacheKeyIsoCode);
+      await _storage?.delete(key: _cacheKeySource);
+      _cachedDialCode = null;
+      _cachedIsoCode = null;
+      _detectionSource = null;
+      _isInitialized = false;
+      debugPrint('DeviceCountryCodeService cache cleared');
+    } catch (e) {
+      debugPrint('Error clearing DeviceCountryCodeService cache: $e');
+    }
+  }
+
+  /// Get debug info
+  Map<String, dynamic> getDebugInfo() {
+    return {
+      'isInitialized': _isInitialized,
+      'dialCode': _cachedDialCode,
+      'isoCode': _cachedIsoCode,
+      'source': _detectionSource,
+      'gpsDetectionInProgress': _gpsDetectionInProgress,
+    };
+  }
+}

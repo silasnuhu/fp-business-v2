@@ -1,0 +1,185 @@
+import 'package:flutter/material.dart';
+import 'package:whoxa/design/fp_tokens.dart';
+import 'package:intl/intl.dart';
+import 'package:whoxa/featuers/chat/data/chats_model.dart';
+
+class ChatDateGrouper {
+  static Map<String, List<Records>> groupMessagesByDate(
+    List<Records> messages,
+  ) {
+    final Map<String, List<Records>> groupedMessages = {};
+
+    for (final message in messages) {
+      final timestamp = _getMessageTimestamp(message);
+      if (timestamp != null) {
+        final dateKey = _getDateKey(timestamp);
+        groupedMessages.putIfAbsent(dateKey, () => []).add(message);
+      }
+    }
+
+    // Sort messages within each date group by timestamp (oldest first)
+    // ✅ FIX: Use stable sort to preserve insertion order for messages with equal timestamps
+    for (final dateKey in groupedMessages.keys) {
+      // Create indexed list to preserve original order for equal timestamps
+      final indexedMessages = groupedMessages[dateKey]!
+          .asMap()
+          .entries
+          .toList();
+
+      indexedMessages.sort((a, b) {
+        final msgA = a.value;
+        final msgB = b.value;
+
+        // ✅ Keep "sending" messages at the end in their original insertion order
+        final isSendingA = msgA.sendingStatus == MessageSendingStatus.sending;
+        final isSendingB = msgB.sendingStatus == MessageSendingStatus.sending;
+
+        // If both are sending, REVERSE index order (because insert(0) puts newer first)
+        // Higher index = inserted earlier = should come first in display
+        if (isSendingA && isSendingB) {
+          return b.key.compareTo(
+            a.key,
+          ); // REVERSED: older (higher index) comes first
+        }
+        // Sending messages come after non-sending (at the end = newest)
+        if (isSendingA && !isSendingB) return 1;
+        if (!isSendingA && isSendingB) return -1;
+
+        final timestampA = _getMessageTimestamp(msgA);
+        final timestampB = _getMessageTimestamp(msgB);
+
+        if (timestampA == null && timestampB == null) {
+          return a.key.compareTo(b.key);
+        }
+        if (timestampA == null) return -1;
+        if (timestampB == null) return 1;
+
+        try {
+          final dateA = DateTime.parse(timestampA);
+          final dateB = DateTime.parse(timestampB);
+          final comparison = dateA.compareTo(dateB);
+          // ✅ If timestamps are equal, preserve original order
+          if (comparison == 0) {
+            return a.key.compareTo(b.key);
+          }
+          return comparison; // Oldest first within each group
+        } catch (e) {
+          return a.key.compareTo(b.key);
+        }
+      });
+
+      // Replace with sorted list
+      groupedMessages[dateKey] = indexedMessages.map((e) => e.value).toList();
+    }
+
+    return groupedMessages;
+  }
+
+  /// Get message timestamp prioritizing createdAt over updatedAt for chronological ordering
+  static String? _getMessageTimestamp(Records message) {
+    // Priority: createdAt -> updatedAt -> null (for proper chronological order)
+    if (message.createdAt != null && message.createdAt!.trim().isNotEmpty) {
+      return message.createdAt;
+    }
+
+    if (message.updatedAt != null && message.updatedAt!.trim().isNotEmpty) {
+      return message.updatedAt;
+    }
+
+    return null;
+  }
+
+  static String _getDateKey(String timestamp) {
+    try {
+      final messageDate = DateTime.parse(timestamp);
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final yesterday = today.subtract(const Duration(days: 1));
+      final msgDate = DateTime(
+        messageDate.year,
+        messageDate.month,
+        messageDate.day,
+      );
+
+      if (msgDate == today) {
+        return 'Today';
+      } else if (msgDate == yesterday) {
+        return 'Yesterday';
+      } else {
+        return DateFormat('dd MMMM yyyy').format(messageDate);
+      }
+    } catch (e) {
+      return 'Unknown';
+    }
+  }
+
+  static List<Widget> buildGroupedMessageList(
+    Map<String, List<Records>> groupedMessages,
+    Function(Records) messageBuilder,
+  ) {
+    final List<Widget> widgets = [];
+
+    // Sort date groups (Today -> Yesterday -> Older dates) for reverse ListView
+    final sortedKeys = groupedMessages.keys.toList()
+      ..sort((a, b) => sortDateKeysForReversedList(a, b));
+
+    for (final dateKey in sortedKeys) {
+      // For reversed ListView, we want messages in each group to be in reverse order too
+      final messages = groupedMessages[dateKey]!;
+
+      // Add messages for this date (in reverse order within the group)
+      for (int i = messages.length - 1; i >= 0; i--) {
+        Widget messageWidget = messageBuilder(messages[i]);
+        widgets.add(messageWidget);
+      }
+
+      // Add date header last (it will appear at the top of the group in reversed ListView)
+      widgets.add(buildDateHeader(dateKey));
+    }
+
+    return widgets;
+  }
+
+  static Widget buildDateHeader(String dateKey) {
+    // WhatsApp-style day chip: quiet, centred, part of the wallpaper rather
+    // than an accent badge competing with the bubbles.
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10.0),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14.0, vertical: 6.0),
+          decoration: BoxDecoration(
+            color: Fp.inkRaised,
+            borderRadius: BorderRadius.circular(Fp.rPill),
+            border: Border.all(color: Fp.hairline),
+            boxShadow: Fp.lift,
+          ),
+          child: Text(
+            dateKey.toUpperCase(),
+            style: TextStyle(
+              fontSize: 11,
+              letterSpacing: 0.6,
+              fontWeight: FontWeight.w700,
+              color: Fp.textMuted,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static int sortDateKeysForReversedList(String a, String b) {
+    if (a == 'Today') return -1;
+    if (b == 'Today') return 1;
+    if (a == 'Yesterday') return -1;
+    if (b == 'Yesterday') return 1;
+
+    try {
+      final dateA = DateFormat('dd MMMM yyyy').parse(a);
+      final dateB = DateFormat('dd MMMM yyyy').parse(b);
+      return dateB.compareTo(dateA); // Newer dates first for reversed ListView
+    } catch (e) {
+      return 0;
+    }
+  }
+}

@@ -1,0 +1,56 @@
+name: peerdart
+description: Simple peer-to-peer with WebRTC for Dart. PeerJS port for Flutter.
+version: 0.5.6
+homepage: https://github.com/MuhammedKpln/peerdart
+repository: https://github.com/MuhammedKpln/peerdart
+
+# VENDORED FORK — do not replace with the pub.dev release.
+#
+# pub.dev's peerdart 0.5.6 (Aug 2024) is a faithful PeerJS wire-protocol port,
+# but three of its behaviours are wrong for the full-mesh calling flow this app
+# runs (see PEERJS_MIGRATION.md §3). Every change is marked `MESH FIX:` in the
+# source; there are no other edits to upstream:
+#
+#   lib/src/mediaconnection.dart
+#     dispose() called _stopMediaDevice(), which stops the tracks of the
+#     MediaConnection's local stream. In a mesh ONE local capture stream is
+#     shared by every MediaConnection, so closing a single peer's connection
+#     (a normal "rebuild connections" step, or one participant leaving) would
+#     stop the mic/camera for everybody. dispose() now tears down only the
+#     negotiator; the owner of the stream stops its tracks. Adds close().
+#
+#   lib/src/peer.dart
+#     _handleMessage() called connection.close() on a re-OFFER for an existing
+#     connectionId. BaseConnection has no close(); the call is only reachable
+#     through a `dynamic` so it compiled but threw NoSuchMethodError at
+#     runtime — exactly on the rebuild path. Now calls dispose().
+#     removeConnection() also null-guards its `as List<dynamic>` cast.
+#
+#   lib/src/negotiator.dart
+#     iceConnectionState `disconnected` tore the whole connection down.
+#     Upstream PeerJS only closes on `failed`/`closed`; `disconnected` is
+#     routinely transient on mobile networks and recovers on its own, so
+#     acting on it dropped peers mid-call. Now logged only. onTrack also
+#     null-guards the connection lookup.
+#
+# The upstream flutter_webrtc constraint (^0.11.6) is widened here to cover
+# the 0.12.x the app pins via dependency_overrides; the peerdart sources use
+# only APIs that are unchanged across that range.
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.1.0
+  flutter_webrtc: ">=0.11.6 <2.0.0"
+  web_socket_channel: ">=2.4.0 <4.0.0"
+  events_emitter: ^0.5.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:

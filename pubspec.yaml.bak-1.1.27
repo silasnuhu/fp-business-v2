@@ -1,0 +1,141 @@
+name: whoxa
+description: "Flickpitch — private messaging, reimagined."
+
+publish_to: "none" # Remove this line if you wish to publish to pub.dev
+
+version: 1.1.26+75
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^2.0.0
+  image_picker: ^1.1.2
+  google_maps_flutter: ^2.12.1
+  geolocator: ^14.0.0
+  intl: ^0.20.2
+  file_picker: ^13.1.0
+  permission_handler: ^12.0.3
+  path: ^1.9.1
+  flutter_svg: ^2.0.17
+  provider: ^6.1.4
+  get_it: ^9.2.1
+  dio: ^5.8.0+1
+  just_audio: ^0.10.5
+  flutter_contacts: ^2.1.0
+  socket_io_client: ^3.1.2
+  connectivity_plus: ^7.3.1
+  package_info_plus: ^10.2.2
+  # status_view: ^0.0.2
+  flutter_image_compress: ^2.4.0
+  path_provider: ^2.1.5
+  video_player: ^2.9.5
+  video_trimmer: ^5.0.0
+  syncfusion_flutter_pdf: ^35.1.40
+  syncfusion_flutter_pdfviewer: ^35.1.40
+  device_info_plus: ^13.3.0
+  url_launcher: ^6.3.1
+  cached_network_image: ^4.0.3
+  flutter_secure_storage: ^11.2.0
+  # Local key-value store for non-secret, high-volume cache data (chat
+  # message pages) that was previously riding on flutter_secure_storage,
+  # which is Keychain/Keystore-backed and meant for small secrets, not bulk
+  # JSON blobs.
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  flutter_hooks: ^0.21.2
+  flutter_inappwebview: ^6.0.0
+  # Firebase
+  firebase_core: ^4.9.0
+  firebase_analytics: ^12.4.1
+  firebase_messaging: ^16.2.2
+  uuid: ^4.5.1
+  flutter_local_notifications: ^22.3.2
+  flutter_webrtc: ^1.0.0
+  # PeerJS client for the `/calls` media plane. The backend is a full WebRTC
+  # mesh brokered by a standalone PeerServer (see PEERJS_MIGRATION.md); there
+  # is no SFU. Vendored fork of pub.dev `peerdart` 0.5.6 with the `MESH FIX:`
+  # patches its full-mesh use needs — see packages/peerdart/pubspec.yaml.
+  peerdart:
+    path: packages/peerdart
+  giphy_get: ^3.5.6
+  share_plus: ^13.3.1
+  # Device sound profile and vibration
+  audioplayers: ^6.1.0
+  flutter_html: ^3.0.0-beta.2
+  geocoding: ^5.0.0
+  google_places_flutter: ^2.1.0
+  http: ^1.2.2
+  get_thumbnail_video: ^0.7.0
+  video_compress: ^3.1.4
+  record: ^7.1.2
+  flutter_markdown_plus: ^1.0.7
+  # Keeps the screen awake (and disables the iOS idle timer) while the call
+  # screen is mounted, so the phone does not dim/lock mid-call.
+  wakelock_plus: ^1.2.8
+  google_mobile_ads: ^9.1.0
+  in_app_purchase: ^3.3.1
+  in_app_purchase_android: ^0.5.3
+  mobile_scanner: ^7.4.2
+
+dependency_overrides:
+  flutter_webrtc: ^0.12.2
+  # html 0.15.7 removed the internal query_selector `matches` that flutter_html 3.0.0 calls.
+  html: 0.15.6
+  # light_compressor:
+  #   git:
+  #     url: https://github.com/packages-primocys/light_compressor-2.2.0.git
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  # To add assets to your application, add an assets section, like this:
+  assets:
+    - assets/
+    - assets/images/
+    - assets/images/call/
+    - assets/images/call_history/
+    - assets/flags/
+    - assets/lang/
+    - assets/images/svg/
+    - assets/images/footer/
+    - assets/audio/
+    - assets/map/
+    - assets/data/country_codes.json
+
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins/Poppins-Regular.ttf
+    - family: PoppinsBold
+      fonts:
+        - asset: assets/fonts/Poppins/Poppins-Bold.ttf
+    - family: PoppinsMedium
+      fonts:
+        - asset: assets/fonts/Poppins/Poppins-Medium.ttf
+    - family: PoppinsSemibold
+      fonts:
+        - asset: assets/fonts/Poppins/Poppins-SemiBold.ttf
+    - family: JostSemibold
+      fonts:
+        - asset: assets/fonts/jost/Jost-SemiBold.ttf
+    - family: vietnam
+      fonts:
+        - asset: assets/fonts/vietnam/BeVietnamPro-Regular.ttf
+    - family: brittany
+      fonts:
+        - asset: assets/fonts/brittany/BrittanySignatureScript.ttf
+    - family: lexend
+      fonts:
+        - asset: assets/fonts/Lexend/Lexend-Regular.ttf

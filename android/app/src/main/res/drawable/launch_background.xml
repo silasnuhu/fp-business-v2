@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Flickpitch launch screen: brand ink with the mark centred -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/fp_ink" />
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/launch_logo" />
+    </item>
+</layer-list>
